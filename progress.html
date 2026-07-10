@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Progress - Enterprise Operations Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="dashboard-data.js"></script>
+    <script src="progress.js" defer></script>
+    <script src="chatbot.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell progress-page-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Progress</p>
+          <h1>Project Progress</h1>
+        </div>
+        <div class="topbar__meta">
+          <span id="progressScope">All projects</span>
+          <a class="button button--ghost" href="index.html">Back</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="metric-grid progress-metric-grid" id="progressMetricGrid" aria-label="Progress metrics"></section>
+
+        <section class="dashboard-grid progress-dashboard-grid">
+          <article class="panel panel--wide">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Average</p>
+                <h2>Progress Overview</h2>
+              </div>
+              <span class="panel__stat" id="progressAverageStat"></span>
+            </div>
+            <div class="progress-hero" id="progressHero"></div>
+          </article>
+
+          <article class="panel panel--wide">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Distribution</p>
+                <h2>Progress Bands</h2>
+              </div>
+            </div>
+            <div class="progress-band-list" id="progressBands"></div>
+          </article>
+
+          <article class="panel panel--full">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Projects</p>
+                <h2>Every Project Progress</h2>
+              </div>
+              <span class="panel__stat" id="progressTableCount"></span>
+            </div>
+            <div class="progress-project-list progress-project-list--page" id="progressProjects"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <button class="chat-launcher" id="chatLauncher" type="button" aria-label="Open assistant">
+      <span aria-hidden="true">?</span>
+      <span>Ask Data</span>
+    </button>
+
+    <aside class="chat-drawer" id="chatDrawer" aria-label="Dashboard assistant" aria-hidden="true">
+      <header class="chat-drawer__header">
+        <div>
+          <p class="eyebrow">Data Assistant</p>
+          <h2>Ask Your Data</h2>
+        </div>
+        <div class="chat-drawer__actions">
+          <button class="icon-control" id="clearChat" type="button" aria-label="Clear chat" title="Clear chat">C</button>
+          <button class="icon-control" id="closeChat" type="button" aria-label="Close assistant" title="Close assistant">x</button>
+        </div>
+      </header>
+
+      <div class="chat-messages" id="chatMessages" aria-live="polite">
+        <article class="chat-message bot">
+          <div class="chat-avatar" aria-hidden="true">A</div>
+          <div class="chat-bubble">
+            <p>Hi. Ask me what you need from the dashboard data: projects, people, tasks, blockers, budgets, meetings, or activity.</p>
+          </div>
+        </article>
+      </div>
+
+      <div class="chat-prompts" aria-label="Suggested prompts">
+        <button type="button">Which projects have the highest progress?</button>
+        <button type="button">Which projects are under 50% progress?</button>
+        <button type="button">Show progress by project</button>
+      </div>
+
+      <form class="chat-composer" id="chatForm">
+        <label class="sr-only" for="chatInput">Message</label>
+        <textarea id="chatInput" rows="1" placeholder="Ask about your data..." autocomplete="off"></textarea>
+        <button class="chat-send" type="submit" aria-label="Send message">&gt;</button>
+      </form>
+    </aside>
+  </body>
+</html>

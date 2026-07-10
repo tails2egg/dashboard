@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clear Accounts - Enterprise Operations Dashboard</title>
+    <link rel="stylesheet" href="auth.css" />
+  </head>
+  <body>
+    <main class="auth-shell">
+      <section class="auth-panel" aria-labelledby="clearTitle">
+        <div class="brand-mark" aria-hidden="true">EOD</div>
+        <p class="eyebrow">Reset Complete</p>
+        <h1 id="clearTitle">Accounts cleared</h1>
+        <p class="auth-copy">All local sign-up accounts and the active session were removed from this browser.</p>
+        <p class="auth-footer">
+          <a class="auth-link-button" href="signup.html">Create a new account</a>
+        </p>
+      </section>
+    </main>
+    <script>
+      localStorage.removeItem("dashboardAuthAccounts");
+      localStorage.removeItem("dashboardAuthSession");
+    </script>
+  </body>
+</html>

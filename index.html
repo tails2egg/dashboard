@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Enterprise Operations Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="dashboard-data.js"></script>
+    <script src="app.js" defer></script>
+    <script src="chatbot.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell" data-app-shell>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Sample Data Workbook</p>
+          <h1>Enterprise Operations Dashboard</h1>
+        </div>
+        <div class="topbar__meta">
+          <span id="refreshDate">Loaded</span>
+          <div class="topbar__account" id="accountBlock" hidden>
+            <div class="topbar__account-row">
+              <button class="topbar__admin" id="adminButton" type="button">Admin</button>
+              <span id="authStatus" class="topbar__status"></span>
+            </div>
+            <button class="topbar__logout" id="logoutButton" type="button">Log Out</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="Dashboard filters">
+        <label>
+          <span>Department</span>
+          <select id="departmentFilter"></select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select id="statusFilter"></select>
+        </label>
+        <label>
+          <span>Risk</span>
+          <select id="riskFilter"></select>
+        </label>
+        <label class="toolbar__search">
+          <span>Search</span>
+          <input id="searchFilter" type="search" placeholder="Project, owner, task, employee" />
+        </label>
+        <button class="button" id="resetFilters" type="button">Reset</button>
+      </section>
+
+      <main>
+        <section class="metric-grid" id="metricGrid" aria-label="Key metrics"></section>
+
+        <section class="dashboard-grid">
+          <article class="panel panel--wide">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Portfolio</p>
+                <h2>Project Status</h2>
+              </div>
+              <span class="panel__stat" id="portfolioCount"></span>
+            </div>
+            <div class="split-view">
+              <div class="donut-wrap">
+                <svg id="statusDonut" viewBox="0 0 220 220" role="img" aria-label="Project status distribution"></svg>
+              </div>
+              <div id="statusLegend" class="legend"></div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Delivery</p>
+                <h2>Task Flow</h2>
+              </div>
+            </div>
+            <div id="taskFlow" class="stack-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Risk</p>
+                <h2>Risk & Priority</h2>
+              </div>
+            </div>
+            <div id="riskPriority" class="matrix"></div>
+          </article>
+
+          <article class="panel panel--wide">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Departments</p>
+                <h2>Workload</h2>
+              </div>
+            </div>
+            <div id="departmentLoad" class="rank-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Budget</p>
+                <h2>Utilization</h2>
+              </div>
+            </div>
+            <div id="budgetList" class="rank-list rank-list--compact"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Weekly Updates</p>
+                <h2>Health Trend</h2>
+              </div>
+            </div>
+            <svg id="healthTrend" class="line-chart" viewBox="0 0 640 260" role="img" aria-label="Weekly health trend"></svg>
+          </article>
+
+          <article class="panel panel--wide">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Activity</p>
+                <h2>Recent Signals</h2>
+              </div>
+            </div>
+            <div id="activityFeed" class="activity-feed"></div>
+          </article>
+
+          <article class="panel panel--full" id="employeesSection">
+            <div class="panel__header panel__header--stack">
+              <div>
+                <p class="eyebrow">Employees</p>
+                <h2>Employee Directory</h2>
+              </div>
+              <div class="panel__tools">
+                <span class="panel__stat" id="employeeCount"></span>
+                <button class="button button--ghost" id="openAddEmployee" type="button">Add Employee</button>
+              </div>
+            </div>
+
+            <div class="employee-add-panel" id="addEmployeePanel" hidden>
+              <form class="employee-add-form" id="addEmployeeForm">
+                <div class="employee-add-form__header">
+                  <div>
+                    <p class="eyebrow">Signed-Up Gmail</p>
+                    <h3>Add Employee</h3>
+                  </div>
+                  <button class="icon-control" id="closeAddEmployee" type="button" aria-label="Close add employee" title="Close add employee">x</button>
+                </div>
+                <p class="employee-add-message" id="addEmployeeMessage"></p>
+                <div class="employee-add-grid">
+                  <label>
+                    <span>Email</span>
+                    <select id="addEmployeeEmail" name="email" required></select>
+                  </label>
+                  <label>
+                    <span>Employee Name</span>
+                    <input id="addEmployeeName" name="employeeName" type="text" required />
+                  </label>
+                  <label>
+                    <span>Department</span>
+                    <select id="addEmployeeDepartment" name="department" required></select>
+                  </label>
+                  <label>
+                    <span>Job Title</span>
+                    <input id="addEmployeeJobTitle" name="jobTitle" type="text" required />
+                  </label>
+                  <label>
+                    <span>Level</span>
+                    <select id="addEmployeeLevel" name="level">
+                      <option>Associate</option>
+                      <option>Specialist</option>
+                      <option>Senior Specialist</option>
+                      <option>Lead</option>
+                      <option>Manager</option>
+                      <option>Senior Manager</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Manager</span>
+                    <input id="addEmployeeManager" name="manager" type="text" placeholder="Department PMO" />
+                  </label>
+                  <label>
+                    <span>Location</span>
+                    <select id="addEmployeeLocation" name="location"></select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select id="addEmployeeStatus" name="employmentStatus">
+                      <option>Active</option>
+                      <option>Contractor</option>
+                      <option>On Leave</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="employee-add-actions">
+                  <button class="button button--ghost" id="cancelAddEmployee" type="button">Cancel</button>
+                  <button class="button" type="submit">Add Employee</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="employee-summary" id="employeeSummary" aria-label="Employee summary"></div>
+
+            <div class="employee-controls" aria-label="Employee filters">
+              <label>
+                <span>Find Employee</span>
+                <input id="employeeSearch" type="search" placeholder="Name, email, manager, title" />
+              </label>
+              <label>
+                <span>Status</span>
+                <select id="employeeStatusFilter"></select>
+              </label>
+              <label>
+                <span>Location</span>
+                <select id="employeeLocationFilter"></select>
+              </label>
+              <label>
+                <span>Rows</span>
+                <select id="employeePageSize">
+                  <option value="12">12</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="table-wrap employee-table-wrap">
+              <table class="employee-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Employee</th>
+                    <th>Email</th>
+                    <th>Department</th>
+                    <th>Job Title</th>
+                    <th>Level</th>
+                    <th>Manager</th>
+                    <th>Location</th>
+                    <th>Hire Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="employeeTable"></tbody>
+              </table>
+            </div>
+
+            <div class="pagination" aria-label="Employee pagination">
+              <button class="button button--ghost" id="employeePrev" type="button">Previous</button>
+              <span id="employeePageInfo"></span>
+              <button class="button button--ghost" id="employeeNext" type="button">Next</button>
+            </div>
+          </article>
+
+          <article class="panel panel--full">
+            <div class="panel__header">
+              <div>
+                <p class="eyebrow">Projects</p>
+                <h2>Portfolio Table</h2>
+              </div>
+              <span class="panel__stat" id="tableCount"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Department</th>
+                    <th>Owner</th>
+                    <th>Status</th>
+                    <th>Risk</th>
+                    <th>Progress</th>
+                    <th>Budget</th>
+                    <th>Spend</th>
+                  </tr>
+                </thead>
+                <tbody id="projectTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <button class="sheet-pull-tab" id="sheetPullTab" type="button" aria-label="Open status drawer" aria-expanded="false">
+      <span aria-hidden="true">&gt;</span>
+    </button>
+
+    <div class="sheet-scrim" id="sheetScrim" hidden></div>
+
+    <aside class="sheet-drawer" id="statusDrawer" aria-label="Project status drawer" aria-hidden="true">
+      <header class="sheet-drawer__header">
+        <div>
+          <p class="eyebrow">Status</p>
+          <h2>Project Dashboard</h2>
+        </div>
+        <button class="icon-control" id="closeStatusDrawer" type="button" aria-label="Close status drawer" title="Close status drawer">x</button>
+      </header>
+      <div class="sheet-drawer__body" id="statusDrawerBody"></div>
+    </aside>
+
+    <div class="employee-detail-scrim" id="employeeDetailScrim" hidden></div>
+
+    <aside class="employee-detail-drawer" id="employeeDetailDrawer" aria-label="Employee details" aria-hidden="true">
+      <header class="employee-detail-drawer__header">
+        <div>
+          <p class="eyebrow">Employee</p>
+          <h2 id="employeeDetailTitle">Employee Details</h2>
+        </div>
+        <button class="icon-control" id="closeEmployeeDetail" type="button" aria-label="Close employee details" title="Close employee details">x</button>
+      </header>
+      <div class="employee-detail-drawer__body" id="employeeDetailBody"></div>
+    </aside>
+
+    <div class="admin-password-scrim" id="adminPasswordScrim" hidden></div>
+
+    <section class="admin-password-modal" id="adminPasswordModal" aria-labelledby="adminPasswordTitle" aria-hidden="true">
+      <form class="admin-password-form" id="adminPasswordForm">
+        <div class="admin-password-form__header">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2 id="adminPasswordTitle">Enter Password</h2>
+          </div>
+          <button class="icon-control" id="closeAdminPassword" type="button" aria-label="Close admin password" title="Close admin password">x</button>
+        </div>
+        <label>
+          <span>Password</span>
+          <input id="adminPasswordInput" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <p class="admin-password-message" id="adminPasswordMessage"></p>
+        <div class="admin-password-actions">
+          <button class="button button--ghost" id="cancelAdminPassword" type="button">Cancel</button>
+          <button class="button" type="submit">Continue</button>
+        </div>
+      </form>
+    </section>
+
+    <button class="chat-launcher" id="chatLauncher" type="button" aria-label="Open assistant">
+      <span aria-hidden="true">?</span>
+      <span>Ask Data</span>
+    </button>
+
+    <aside class="chat-drawer" id="chatDrawer" aria-label="Dashboard assistant" aria-hidden="true">
+      <header class="chat-drawer__header">
+        <div>
+          <p class="eyebrow">Data Assistant</p>
+          <h2>Ask Your Data</h2>
+        </div>
+        <div class="chat-drawer__actions">
+          <button class="icon-control" id="clearChat" type="button" aria-label="Clear chat" title="Clear chat">C</button>
+          <button class="icon-control" id="closeChat" type="button" aria-label="Close assistant" title="Close assistant">x</button>
+        </div>
+      </header>
+
+      <div class="chat-messages" id="chatMessages" aria-live="polite">
+        <article class="chat-message bot">
+          <div class="chat-avatar" aria-hidden="true">A</div>
+          <div class="chat-bubble">
+            <p>Hi. Ask me what you need from the dashboard data: projects, people, tasks, blockers, budgets, meetings, or activity.</p>
+          </div>
+        </article>
+      </div>
+
+      <div class="chat-prompts" aria-label="Suggested prompts">
+        <button type="button">Which projects are at risk?</button>
+        <button type="button">What is blocked right now?</button>
+        <button type="button">Show highest budget projects</button>
+      </div>
+
+      <form class="chat-composer" id="chatForm">
+        <label class="sr-only" for="chatInput">Message</label>
+        <textarea id="chatInput" rows="1" placeholder="Ask about your data..." autocomplete="off"></textarea>
+        <button class="chat-send" type="submit" aria-label="Send message">&gt;</button>
+      </form>
+    </aside>
+  </body>
+</html>
