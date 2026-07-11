@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Project Progress - Enterprise Operations Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="auth-guard.js"></script>
     <script src="dashboard-data.js"></script>
     <script src="progress.js" defer></script>
     <script src="chatbot.js" defer></script>
@@ -18,7 +19,7 @@
         </div>
         <div class="topbar__meta">
           <span id="progressScope">All projects</span>
-          <a class="button button--ghost" href="index.html">Back</a>
+          <a class="button button--ghost" href="/dashbaord2admins" data-dashboard-back>Back</a>
         </div>
       </header>
 
@@ -60,6 +61,18 @@
         </section>
       </main>
     </div>
+
+    <div class="employee-detail-scrim edit-drawer-scrim" id="editDrawerScrim" hidden></div>
+    <aside class="employee-detail-drawer edit-drawer" id="editDrawer" aria-label="Edit record" aria-hidden="true">
+      <header class="employee-detail-drawer__header">
+        <div>
+          <p class="eyebrow">Admin Edit</p>
+          <h2 id="editDrawerTitle">Edit</h2>
+        </div>
+        <button class="icon-control" id="closeEditDrawer" type="button" aria-label="Close edit panel" title="Close edit panel">x</button>
+      </header>
+      <div class="employee-detail-drawer__body edit-drawer__body" id="editDrawerBody"></div>
+    </aside>
 
     <button class="chat-launcher" id="chatLauncher" type="button" aria-label="Open assistant">
       <span aria-hidden="true">?</span>

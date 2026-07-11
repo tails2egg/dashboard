@@ -5,6 +5,7 @@ const resetOpeners = document.querySelectorAll("[data-open-reset]");
 const ssoDemoButtons = document.querySelectorAll("[data-sso-demo]");
 const ACCOUNT_STORAGE_KEY = "dashboardAuthAccounts";
 const SESSION_STORAGE_KEY = "dashboardAuthSession";
+const ADMIN_SESSION_STORAGE_KEY = "dashboardAdminSession";
 
 function clearLoginPasswords() {
   document.querySelectorAll("[data-auth-form='login'] input[name='password']").forEach((input) => {
@@ -33,11 +34,7 @@ function setFormMessage(form, message, type = "") {
 }
 
 function validEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function validGmail(value) {
-  return /^[a-z0-9](?:[a-z0-9._%+-]{0,62}[a-z0-9])?@gmail\.com$/i.test(text(value));
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(value));
 }
 
 function normalizedEmail(value) {
@@ -53,6 +50,22 @@ function storedAccounts() {
   }
 }
 
+function storeLocalAccount(account) {
+  const email = normalizedEmail(account.email);
+  const accounts = storedAccounts().filter((storedAccount) => normalizedEmail(storedAccount.email) !== email);
+  const localAccount = {
+    email,
+    employeeId: account.employeeId || "",
+    employeeName: account.employeeName || "",
+    department: account.department || "",
+    createdAt: account.createdAt || new Date().toISOString(),
+    isAdmin: Boolean(account.isAdmin),
+  };
+  accounts.push(localAccount);
+  window.localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(accounts));
+  return localAccount;
+}
+
 function saveSession(account) {
   window.localStorage.setItem(
     SESSION_STORAGE_KEY,
@@ -61,44 +74,74 @@ function saveSession(account) {
       employeeId: account.employeeId || "",
       employeeName: account.employeeName || "",
       department: account.department || "",
+      isAdmin: Boolean(account.isAdmin),
       signedInAt: new Date().toISOString(),
     }),
   );
 }
 
-function emailExists(email) {
-  const target = normalizedEmail(email);
-  return storedAccounts().some((account) => normalizedEmail(account.email) === target);
+function saveAdminSession(account) {
+  if (!account.isAdmin || !account.adminSessionToken) {
+    window.sessionStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
+    return;
+  }
+
+  window.sessionStorage.setItem(
+    ADMIN_SESSION_STORAGE_KEY,
+    JSON.stringify({
+      ok: true,
+      email: account.email,
+      role: "admin",
+      token: account.adminSessionToken || "",
+      signedInAt: new Date().toISOString(),
+    }),
+  );
 }
 
-function employeeRecords() {
-  return window.DASHBOARD_DATA?.Employees || [];
-}
-
-function findEmployeeByEmail(email) {
-  const target = normalizedEmail(email);
-  return employeeRecords().find((employee) => normalizedEmail(employee.Email) === target);
-}
-
-function saveAccount(form) {
-  const employee = findEmployeeByEmail(form.elements.email.value);
-  const account = {
-    email: normalizedEmail(form.elements.email.value),
-    employeeId: employee?.["Employee ID"] || "",
-    employeeName: employee?.["Employee Name"] || "",
-    department: employee?.Department || "",
-    createdAt: new Date().toISOString(),
-  };
-  const accounts = storedAccounts();
-  accounts.push(account);
-  window.localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(accounts));
-  saveSession(account);
-  return account;
+function signedInPath(account) {
+  const next = new URLSearchParams(window.location.search).get("next") || "";
+  const authPath = /^\/(?:login|log-in|log%20in|signup|sign-up|sign%20up)(?:[/?#]|$)/i;
+  if (next.startsWith("/") && !next.startsWith("//") && !authPath.test(next)) {
+    return next;
+  }
+  return account.isAdmin ? "/dashbaord2admins" : "/dashbaord";
 }
 
 function accountForEmail(email) {
   const target = normalizedEmail(email);
   return storedAccounts().find((account) => normalizedEmail(account.email) === target) || null;
+}
+
+async function authRequest(path, payload) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || "Authentication failed.");
+  }
+  return result;
+}
+
+async function createAccount(form) {
+  return authRequest("/api/auth/signup", {
+    email: form.elements.email.value,
+    password: form.elements.password.value,
+  });
+}
+
+async function loginAccount(form) {
+  const result = await authRequest("/api/auth/login", {
+    email: form.elements.email.value,
+    password: form.elements.password.value,
+  });
+  const localAccount = storeLocalAccount(result.account);
+  localAccount.adminSessionToken = result.adminSessionToken || "";
+  saveSession(localAccount);
+  saveAdminSession(localAccount);
+  return localAccount;
 }
 
 function validateForm(form) {
@@ -113,21 +156,13 @@ function validateForm(form) {
   });
   setFormMessage(form, "");
 
-  if (!email || !validGmail(email.value)) {
-    setFieldError(form, "email", "Enter a valid Gmail address.");
-    valid = false;
-  } else if (mode === "signup" && emailExists(email.value)) {
-    setFieldError(form, "email", "An account with this email already exists.");
+  if (!email || !validEmail(email.value)) {
+    setFieldError(form, "email", "Enter a valid email address.");
     valid = false;
   }
 
-  if (!password || password.value.length < 8) {
-    setFieldError(form, "password", "Use at least 8 characters.");
-    valid = false;
-  }
-
-  if (mode === "login" && email.value && !emailExists(email.value)) {
-    setFieldError(form, "email", "We couldn't find an account for this email.");
+  if (!password || password.value.length < 8 || !/[A-Za-z]/.test(password.value) || !/\d/.test(password.value)) {
+    setFieldError(form, "password", "Use at least 8 characters with one letter and one number.");
     valid = false;
   }
 
@@ -203,19 +238,21 @@ forms.forEach((form) => {
     setFormMessage(form, mode === "signup" ? "Creating your account..." : "Signing you in...");
 
     try {
-      await fakeRequest();
       if (mode === "signup") {
-        saveAccount(form);
-        setFormMessage(form, "Account created. Opening dashboard...", "success");
+        const result = await createAccount(form);
+        const localAccount = storeLocalAccount(result.account);
+        localAccount.adminSessionToken = result.adminSessionToken || "";
+        saveSession(localAccount);
+        saveAdminSession(localAccount);
+        setFormMessage(form, result.message || "Account created. Opening dashboard...", "success");
         window.setTimeout(() => {
-          window.location.assign("/");
+          window.location.assign(signedInPath(localAccount));
         }, 700);
       } else {
-        const account = accountForEmail(form.elements.email.value);
-        if (account) saveSession(account);
+        const localAccount = await loginAccount(form);
         setFormMessage(form, "You're in. Opening dashboard...", "success");
         window.setTimeout(() => {
-          window.location.assign("/");
+          window.location.assign(signedInPath(localAccount));
         }, 700);
       }
     } catch (error) {
@@ -234,8 +271,8 @@ resetForms.forEach((form) => {
     setFieldError(form, "resetEmail", "");
     setFormMessage(form, "");
 
-    if (!email || !validGmail(email.value)) {
-      setFieldError(form, "resetEmail", "Enter a valid Gmail address.");
+    if (!email || !validEmail(email.value)) {
+      setFieldError(form, "resetEmail", "Enter a valid email address.");
       setFormMessage(form, "Please check the highlighted field.", "error");
       return;
     }

@@ -786,6 +786,13 @@ input:focus {
   color: var(--green);
 }
 
+.auth-message-link {
+  color: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .auth-footer {
   margin: 18px 0 0;
   font-size: 0.92rem;

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Login - Enterprise Operations Dashboard</title>
     <link rel="stylesheet" href="auth.css" />
-    <script src="dashboard-data.js"></script>
     <script src="auth.js" defer></script>
   </head>
   <body class="login-page">
@@ -45,7 +44,7 @@
                   id="loginPassword"
                   name="password"
                   type="password"
-                  autocomplete="new-password"
+                  autocomplete="current-password"
                   minlength="8"
                   value=""
                   required
@@ -94,7 +93,7 @@
             </form>
           </section>
 
-          <p class="auth-footer">New here? <a href="signup.html">Create an account</a></p>
+          <p class="auth-footer">New here? <a href="/signup">Create an account</a></p>
         </div>
       </section>
     </main>

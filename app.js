@@ -8,8 +8,8 @@ const meetings = data.Meetings || [];
 const updates = data["Weekly Updates"] || [];
 const activities = data["Activity Log"] || [];
 const authSessionKey = "dashboardAuthSession";
-const accountStorageKey = "dashboardAuthAccounts";
 const adminSessionKey = "dashboardAdminSession";
+const accountStorageKey = "dashboardAuthAccounts";
 
 const colors = {
   "In Progress": "#16837a",
@@ -34,6 +34,29 @@ const colors = {
   Unassigned: "#667085",
 };
 
+const taskStatuses = ["Backlog", "Not Started", "In Progress", "In Review", "Blocked", "Completed"];
+const taskPriorities = ["Low", "Medium", "High", "Critical"];
+const statusPaths = {
+  "At Risk": "/at-risk",
+  Completed: "/completed",
+  Planning: "/planning",
+  "On Hold": "/on-hold",
+  "Not Started": "/not-started",
+  "In Review": "/in-review",
+  Backlog: "/backlog",
+  Blocked: "/blocked",
+};
+const adminStatusPaths = {
+  "At Risk": "/at-risk2admins",
+  Completed: "/completed2admins",
+  Planning: "/planning2admins",
+  "On Hold": "/on-hold2admins",
+  "Not Started": "/not-started2admins",
+  "In Review": "/in-review2admins",
+  Backlog: "/backlog2admins",
+  Blocked: "/blocked2admins",
+};
+
 const state = {
   department: "All",
   status: "All",
@@ -44,12 +67,13 @@ const state = {
   employeeLocation: "All",
   employeePage: 1,
   employeePageSize: 12,
+  taskPage: 1,
+  taskPageSize: 25,
 };
 
 const els = {
   authStatus: document.querySelector("#authStatus"),
   accountBlock: document.querySelector("#accountBlock"),
-  adminButton: document.querySelector("#adminButton"),
   logoutButton: document.querySelector("#logoutButton"),
   refreshDate: document.querySelector("#refreshDate"),
   departmentFilter: document.querySelector("#departmentFilter"),
@@ -62,13 +86,6 @@ const els = {
   statusDrawer: document.querySelector("#statusDrawer"),
   sheetScrim: document.querySelector("#sheetScrim"),
   statusDrawerBody: document.querySelector("#statusDrawerBody"),
-  adminPasswordScrim: document.querySelector("#adminPasswordScrim"),
-  adminPasswordModal: document.querySelector("#adminPasswordModal"),
-  adminPasswordForm: document.querySelector("#adminPasswordForm"),
-  closeAdminPassword: document.querySelector("#closeAdminPassword"),
-  cancelAdminPassword: document.querySelector("#cancelAdminPassword"),
-  adminPasswordInput: document.querySelector("#adminPasswordInput"),
-  adminPasswordMessage: document.querySelector("#adminPasswordMessage"),
   employeeDetailScrim: document.querySelector("#employeeDetailScrim"),
   employeeDetailDrawer: document.querySelector("#employeeDetailDrawer"),
   employeeDetailTitle: document.querySelector("#employeeDetailTitle"),
@@ -86,24 +103,52 @@ const els = {
   activityFeed: document.querySelector("#activityFeed"),
   employeeCount: document.querySelector("#employeeCount"),
   employeeSummary: document.querySelector("#employeeSummary"),
-  employeeSearch: document.querySelector("#employeeSearch"),
-  employeeStatusFilter: document.querySelector("#employeeStatusFilter"),
-  employeeLocationFilter: document.querySelector("#employeeLocationFilter"),
-  employeePageSize: document.querySelector("#employeePageSize"),
   openAddEmployee: document.querySelector("#openAddEmployee"),
   addEmployeePanel: document.querySelector("#addEmployeePanel"),
   addEmployeeForm: document.querySelector("#addEmployeeForm"),
   closeAddEmployee: document.querySelector("#closeAddEmployee"),
   cancelAddEmployee: document.querySelector("#cancelAddEmployee"),
-  addEmployeeMessage: document.querySelector("#addEmployeeMessage"),
-  addEmployeeEmail: document.querySelector("#addEmployeeEmail"),
-  addEmployeeName: document.querySelector("#addEmployeeName"),
   addEmployeeDepartment: document.querySelector("#addEmployeeDepartment"),
+  addEmployeeLevel: document.querySelector("#addEmployeeLevel"),
   addEmployeeLocation: document.querySelector("#addEmployeeLocation"),
+  addEmployeeStatus: document.querySelector("#addEmployeeStatus"),
+  addEmployeeMessage: document.querySelector("#addEmployeeMessage"),
+  employeeSearch: document.querySelector("#employeeSearch"),
+  employeeStatusFilter: document.querySelector("#employeeStatusFilter"),
+  employeeLocationFilter: document.querySelector("#employeeLocationFilter"),
+  employeePageSize: document.querySelector("#employeePageSize"),
   employeeTable: document.querySelector("#employeeTable"),
   employeePrev: document.querySelector("#employeePrev"),
   employeeNext: document.querySelector("#employeeNext"),
   employeePageInfo: document.querySelector("#employeePageInfo"),
+  openAddProject: document.querySelector("#openAddProject"),
+  addProjectPanel: document.querySelector("#addProjectPanel"),
+  addProjectForm: document.querySelector("#addProjectForm"),
+  closeAddProject: document.querySelector("#closeAddProject"),
+  cancelAddProject: document.querySelector("#cancelAddProject"),
+  addProjectDepartment: document.querySelector("#addProjectDepartment"),
+  addProjectOwner: document.querySelector("#addProjectOwner"),
+  addProjectStatus: document.querySelector("#addProjectStatus"),
+  addProjectPriority: document.querySelector("#addProjectPriority"),
+  addProjectRisk: document.querySelector("#addProjectRisk"),
+  addProjectMessage: document.querySelector("#addProjectMessage"),
+  taskTableCount: document.querySelector("#taskTableCount"),
+  openAddTask: document.querySelector("#openAddTask"),
+  addTaskPanel: document.querySelector("#addTaskPanel"),
+  addTaskForm: document.querySelector("#addTaskForm"),
+  closeAddTask: document.querySelector("#closeAddTask"),
+  cancelAddTask: document.querySelector("#cancelAddTask"),
+  addTaskProject: document.querySelector("#addTaskProject"),
+  addTaskAssignee: document.querySelector("#addTaskAssignee"),
+  addTaskStatus: document.querySelector("#addTaskStatus"),
+  addTaskPriority: document.querySelector("#addTaskPriority"),
+  addTaskMessage: document.querySelector("#addTaskMessage"),
+  taskPageSize: document.querySelector("#taskPageSize"),
+  taskTable: document.querySelector("#taskTable"),
+  taskPrev: document.querySelector("#taskPrev"),
+  taskNext: document.querySelector("#taskNext"),
+  taskPageInfo: document.querySelector("#taskPageInfo"),
+  tasksSection: document.querySelector("#tasksSection"),
   projectTable: document.querySelector("#projectTable"),
   tableCount: document.querySelector("#tableCount"),
 };
@@ -126,6 +171,39 @@ function authSession() {
   }
 }
 
+function isAdminSession() {
+  try {
+    const session = JSON.parse(window.sessionStorage.getItem(adminSessionKey) || "null");
+    if (session?.ok && session?.token) return true;
+  } catch (error) {
+    // Fall back to the regular auth session below.
+  }
+
+  return false;
+}
+
+function isAdminDashboardRoute() {
+  return window.location.pathname.includes("2admins");
+}
+
+function adminSession() {
+  try {
+    const session = JSON.parse(window.sessionStorage.getItem(adminSessionKey) || "null");
+    return session?.ok ? session : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function adminRequestHeaders() {
+  const session = adminSession();
+  return {
+    "Content-Type": "application/json",
+    "X-Admin-Email": text(session?.email).toLowerCase(),
+    "X-Admin-Token": text(session?.token),
+  };
+}
+
 function storedAccounts() {
   try {
     const accounts = JSON.parse(window.localStorage.getItem(accountStorageKey) || "[]");
@@ -133,32 +211,6 @@ function storedAccounts() {
   } catch (error) {
     return [];
   }
-}
-
-function removeUsedAccounts() {
-  const employeeEmails = new Set(employees.map((employee) => text(employee.Email).toLowerCase()));
-  const availableAccounts = storedAccounts().filter(
-    (account) => !employeeEmails.has(text(account.email).toLowerCase()),
-  );
-  window.localStorage.setItem(accountStorageKey, JSON.stringify(availableAccounts));
-  return availableAccounts;
-}
-
-function signedUpEmployeeEmails() {
-  const existing = new Set(employees.map((employee) => text(employee.Email).toLowerCase()));
-  return removeUsedAccounts()
-    .map((account) => text(account.email).toLowerCase())
-    .filter((email) => email && !existing.has(email))
-    .sort();
-}
-
-function nameFromEmail(email) {
-  return text(email)
-    .split("@")[0]
-    .split(/[._+-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function excelDate(serial, includeTime = false) {
@@ -174,6 +226,20 @@ function excelDate(serial, includeTime = false) {
     hour: includeTime ? "numeric" : undefined,
     minute: includeTime ? "2-digit" : undefined,
   }).format(date);
+}
+
+function excelDateInput(serial) {
+  const value = Number(serial);
+  if (!Number.isFinite(value)) return "";
+  const date = new Date(Math.round((value - 25569) * 86400 * 1000));
+  return date.toISOString().slice(0, 10);
+}
+
+function dateInputToExcelSerial(value) {
+  if (!value) return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  return String(Math.round(date.getTime() / 86400000 + 25569));
 }
 
 function compact(value) {
@@ -389,6 +455,168 @@ function employeeDetailList(title, rows, emptyText, renderItem) {
       <h3>${escapeHtml(title)}</h3>
       <div class="employee-detail-list">${body}</div>
     </section>
+  `;
+}
+
+function optionList(values, current) {
+  return values
+    .map((value) => {
+      const selected = text(value) === text(current) ? " selected" : "";
+      return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(value)}</option>`;
+    })
+    .join("");
+}
+
+function optionPairs(values, current = "") {
+  return values
+    .map(({ value, label }) => {
+      const selected = text(value) === text(current) ? " selected" : "";
+      return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+}
+
+function todayInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function renderEmployeeEditForm(employee) {
+  if (!isAdminSession()) return "";
+
+  const levels = ["Associate", "Specialist", "Senior Specialist", "Lead", "Manager", "Senior Manager"];
+  const statuses = ["Active", "Contractor", "On Leave"];
+  const locations = uniqueWithFallback(employees, "Location");
+  const employeeId = text(employee["Employee ID"]);
+
+  return `
+    <section class="employee-detail-section employee-edit-section" id="employeeEditSection" hidden>
+      <h3>Edit Employee</h3>
+      <form class="employee-add-form employee-edit-form" data-employee-edit-form data-employee-id="${escapeHtml(employeeId)}">
+        <div class="employee-add-grid">
+          <label>
+            <span>Email</span>
+            <input name="email" type="email" value="${escapeHtml(text(employee.Email))}" required />
+          </label>
+          <label>
+            <span>Employee Name</span>
+            <input name="employeeName" type="text" value="${escapeHtml(text(employee["Employee Name"]))}" required />
+          </label>
+          <label>
+            <span>Department</span>
+            <select name="department" required>
+              ${optionList(unique(departments, "Department Name"), employee.Department)}
+            </select>
+          </label>
+          <label>
+            <span>Job Title</span>
+            <input name="jobTitle" type="text" value="${escapeHtml(text(employee["Job Title"]))}" required />
+          </label>
+          <label>
+            <span>Level</span>
+            <select name="level">${optionList(levels, employee.Level)}</select>
+          </label>
+          <label>
+            <span>Manager</span>
+            <input name="manager" type="text" value="${escapeHtml(text(employee.Manager))}" />
+          </label>
+          <label>
+            <span>Location</span>
+            <select name="location">${optionList(locations, employee.Location)}</select>
+          </label>
+          <label>
+            <span>Status</span>
+            <select name="employmentStatus">${optionList(statuses, employee["Employment Status"])}</select>
+          </label>
+        </div>
+        <p class="employee-add-message" data-employee-edit-message></p>
+        <div class="employee-add-actions">
+          <button class="button button--ghost" type="button" data-cancel-employee-edit>Cancel</button>
+          <button class="button" type="submit">Save Employee</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderProjectEditForm(project) {
+  if (!isAdminSession()) return "";
+
+  const projectId = text(project["Project ID"]);
+  const departmentOptions = unique(departments, "Department Name");
+  const ownerOptions = employees
+    .slice()
+    .sort((a, b) => text(a["Employee Name"]).localeCompare(text(b["Employee Name"])))
+    .map((employee) => ({
+      value: text(employee["Employee ID"]),
+      label: `${text(employee["Employee Name"])} (${text(employee.Department)})`,
+    }));
+
+  return `
+    <tr class="project-edit-row" data-project-edit-row="${escapeHtml(projectId)}" hidden>
+      <td colspan="9">
+        <form class="employee-add-form project-edit-form" data-project-table-edit-form data-project-id="${escapeHtml(projectId)}">
+          <div class="project-edit-grid">
+            <label>
+              <span>Project Name</span>
+              <input name="projectName" type="text" value="${escapeHtml(text(project["Project Name"]))}" required />
+            </label>
+            <label>
+              <span>Department</span>
+              <select name="department" required>
+                ${optionList(departmentOptions, project.Department)}
+              </select>
+            </label>
+            <label>
+              <span>Owner</span>
+              <select name="ownerId" required>
+                ${optionPairs(ownerOptions, project["Owner ID"])}
+              </select>
+            </label>
+            <label>
+              <span>Status</span>
+              <select name="status">${optionList(["Not Started", "Planning", "In Progress", "At Risk", "On Hold", "Completed"], project.Status)}</select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select name="priority">${optionList(["Low", "Medium", "High", "Critical"], project.Priority)}</select>
+            </label>
+            <label>
+              <span>Risk Level</span>
+              <select name="risk">${optionList(["Low", "Medium", "High"], project["Risk Level"])}</select>
+            </label>
+            <label>
+              <span>Start Date</span>
+              <input name="startDate" type="date" value="${escapeHtml(excelDateInput(project["Start Date"]))}" required />
+            </label>
+            <label>
+              <span>Target End Date</span>
+              <input name="targetEndDate" type="date" value="${escapeHtml(excelDateInput(project["Target End Date"]))}" required />
+            </label>
+            <label>
+              <span>Progress %</span>
+              <input name="progress" type="number" min="0" max="100" step="1" value="${escapeHtml(Math.round(number(project["Progress %"])))}" />
+            </label>
+            <label>
+              <span>Budget SAR</span>
+              <input name="budget" type="number" min="0" step="0.01" value="${escapeHtml(text(project["Budget SAR"]))}" />
+            </label>
+            <label>
+              <span>Actual Spend SAR</span>
+              <input name="spend" type="number" min="0" step="0.01" value="${escapeHtml(text(project["Actual Spend SAR"]))}" />
+            </label>
+            <label>
+              <span>Strategic Theme</span>
+              <input name="strategicTheme" type="text" value="${escapeHtml(text(project["Strategic Theme"]))}" />
+            </label>
+          </div>
+          <p class="employee-add-message project-edit-message" data-project-edit-message></p>
+          <div class="employee-add-actions">
+            <button class="button button--ghost" type="button" data-cancel-project-table-edit>Cancel</button>
+            <button class="button" type="submit">Save Project</button>
+          </div>
+        </form>
+      </td>
+    </tr>
   `;
 }
 
@@ -839,9 +1067,128 @@ function renderEmployees() {
   els.employeeNext.disabled = state.employeePage >= totalPages;
 }
 
+function renderTasks() {
+  const rows = filteredTasks().sort((a, b) => {
+    const dueDiff = number(a["Due Date"]) - number(b["Due Date"]);
+    return dueDiff || text(a["Task ID"]).localeCompare(text(b["Task ID"]));
+  });
+  const pageSize = state.taskPageSize === "all" ? Math.max(rows.length, 1) : Number(state.taskPageSize);
+  const totalPages = Math.max(Math.ceil(rows.length / pageSize), 1);
+  const canEdit = isAdminSession();
+
+  if (state.taskPage > totalPages) state.taskPage = totalPages;
+
+  const start = (state.taskPage - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  els.taskTableCount.textContent = `${rows.length} of ${tasks.length} tasks`;
+
+  if (!rows.length) {
+    els.taskTable.innerHTML = `
+      <tr>
+        <td colspan="11">No matching tasks</td>
+      </tr>
+    `;
+    els.taskPageInfo.textContent = "0 rows";
+    els.taskPrev.disabled = true;
+    els.taskNext.disabled = true;
+    return;
+  }
+
+  els.taskTable.innerHTML = pageRows
+    .map((task) => {
+      const taskId = text(task["Task ID"]);
+      const status = text(task.Status) || "Unassigned";
+      const priority = text(task.Priority) || "Unassigned";
+      const progress = Math.round(number(task["Completion %"]));
+      const actualHours = text(task["Actual Hours"]);
+      const estimatedHours = text(task["Estimated Hours"]);
+      return `
+        <tr class="task-row" data-task-id="${escapeHtml(taskId)}">
+          <td><strong>${escapeHtml(taskId)}</strong></td>
+          <td>${escapeHtml(text(task["Task Name"]))}</td>
+          <td>${escapeHtml(text(task.Project))}</td>
+          <td>${escapeHtml(text(task["Assigned To"]) || "Unassigned")}</td>
+          <td>${escapeHtml(text(task.Department))}</td>
+          <td><span class="pill" style="background:${colors[status] || "#667085"}">${escapeHtml(status)}</span></td>
+          <td>${escapeHtml(priority)}</td>
+          <td>${escapeHtml(excelDate(task["Due Date"]) || "Not set")}</td>
+          <td class="progress-cell">
+            <strong>${progress}%</strong>
+            <div class="bar-track"><div class="bar-fill" style="width:${progress}%; background:${colors[status] || "#16837a"}"></div></div>
+          </td>
+          <td>${escapeHtml(actualHours || "0")} / ${escapeHtml(estimatedHours || "0")}</td>
+          <td>
+            ${
+              canEdit
+                ? `<button class="button button--ghost task-table-edit" type="button" data-open-task-table-edit>Edit</button>`
+                : `<span class="table-muted">View</span>`
+            }
+          </td>
+        </tr>
+        ${
+          canEdit
+            ? `
+              <tr class="task-edit-row" data-task-edit-row="${escapeHtml(taskId)}" hidden>
+                <td colspan="11">
+                  <form class="task-table-edit-form" data-task-table-edit-form data-task-id="${escapeHtml(taskId)}">
+                    <label>
+                      <span>Task Name</span>
+                      <input name="taskName" type="text" value="${escapeHtml(text(task["Task Name"]))}" required />
+                    </label>
+                    <label>
+                      <span>Assigned To</span>
+                      <input name="assignedTo" type="text" value="${escapeHtml(text(task["Assigned To"]))}" />
+                    </label>
+                    <label>
+                      <span>Status</span>
+                      <select name="status">${optionList(taskStatuses, status)}</select>
+                    </label>
+                    <label>
+                      <span>Priority</span>
+                      <select name="priority">${optionList(taskPriorities, priority)}</select>
+                    </label>
+                    <label>
+                      <span>Due Date</span>
+                      <input name="dueDate" type="date" value="${escapeHtml(excelDateInput(task["Due Date"]))}" />
+                    </label>
+                    <label>
+                      <span>Estimated Hours</span>
+                      <input name="estimatedHours" type="number" min="0" step="0.25" value="${escapeHtml(estimatedHours)}" />
+                    </label>
+                    <label>
+                      <span>Actual Hours</span>
+                      <input name="actualHours" type="number" min="0" step="0.25" value="${escapeHtml(actualHours)}" />
+                    </label>
+                    <label>
+                      <span>Completion %</span>
+                      <input name="completion" type="number" min="0" max="100" step="1" value="${escapeHtml(progress)}" />
+                    </label>
+                    <p class="task-edit-message" data-task-edit-message></p>
+                    <div class="task-edit-actions">
+                      <button class="button button--ghost" type="button" data-cancel-task-table-edit>Cancel</button>
+                      <button class="button" type="submit">Save Task</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+            `
+            : ""
+        }
+      `;
+    })
+    .join("");
+
+  const end = Math.min(start + pageRows.length, rows.length);
+  els.taskPageInfo.textContent = `${start + 1}-${end} of ${rows.length}`;
+  els.taskPrev.disabled = state.taskPage <= 1;
+  els.taskNext.disabled = state.taskPage >= totalPages;
+}
+
 function renderEmployeeDetails(employee) {
   const status = text(employee["Employment Status"]) || "Unassigned";
   const related = employeeRelatedRows(employee);
+  const canEdit = isAdminSession();
   const completedTasks = related.assignedTasks.filter((task) => text(task.Status) === "Completed").length;
   const openTasks = related.assignedTasks.length - completedTasks;
   const blockedTasks = related.assignedTasks.filter((task) => text(task.Status) === "Blocked").length;
@@ -864,7 +1211,14 @@ function renderEmployeeDetails(employee) {
         <p>${escapeHtml(text(employee["Job Title"]) || "Unassigned role")} - ${escapeHtml(text(employee.Department) || "Unassigned department")}</p>
         <span class="pill" style="background:${colors[status] || (status === "Unassigned" ? "#667085" : "#16837a")}">${escapeHtml(status)}</span>
       </div>
+      ${
+        canEdit
+          ? `<button class="button button--ghost employee-detail-edit-button" type="button" data-open-employee-edit>Edit</button>`
+          : ""
+      }
     </section>
+
+    ${renderEmployeeEditForm(employee)}
 
     <section class="employee-detail-grid" aria-label="Employee profile">
       ${detailValue("Employee ID", employee["Employee ID"])}
@@ -1008,20 +1362,22 @@ function handleEmployeeTableKeydown(event) {
 
 function renderTable() {
   const rows = filteredProjects().sort((a, b) => number(b["Progress %"]) - number(a["Progress %"]));
+  const canEdit = isAdminSession();
   els.tableCount.textContent = `${rows.length} rows`;
   if (!rows.length) {
     els.projectTable.innerHTML = `
       <tr>
-        <td colspan="8">No matching projects</td>
+        <td colspan="9">No matching projects</td>
       </tr>
     `;
     return;
   }
   els.projectTable.innerHTML = rows
     .map((project) => {
+      const projectId = text(project["Project ID"]);
       const progress = number(project["Progress %"]);
       return `
-        <tr>
+        <tr class="project-row" data-project-id="${escapeHtml(projectId)}">
           <td><strong>${escapeHtml(text(project["Project Name"]))}</strong></td>
           <td>${escapeHtml(text(project.Department))}</td>
           <td>${escapeHtml(text(project.Owner))}</td>
@@ -1033,7 +1389,15 @@ function renderTable() {
           </td>
           <td>${currency(number(project["Budget SAR"]))}</td>
           <td>${currency(number(project["Actual Spend SAR"]))}</td>
+          <td>
+            ${
+              canEdit
+                ? `<button class="button button--ghost project-table-edit" type="button" data-open-project-table-edit>Edit</button>`
+                : `<span class="table-muted">View</span>`
+            }
+          </td>
         </tr>
+        ${canEdit ? renderProjectEditForm(project) : ""}
       `;
     })
     .join("");
@@ -1074,130 +1438,468 @@ function exportEmployeeCsv() {
   downloadCsv("employees_export.csv", headers, filteredEmployees());
 }
 
-function fillBasicSelect(select, values, placeholder = "") {
-  select.innerHTML = [
-    placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : "",
-    ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`),
-  ].join("");
+function setEmployeeEditMessage(form, message, type = "") {
+  const messageEl = form.querySelector("[data-employee-edit-message]");
+  if (!messageEl) return;
+  messageEl.textContent = message;
+  messageEl.className = `employee-add-message ${type}`.trim();
 }
 
 function setAddEmployeeMessage(message, type = "") {
+  if (!els.addEmployeeMessage) return;
   els.addEmployeeMessage.textContent = message;
   els.addEmployeeMessage.className = `employee-add-message ${type}`.trim();
 }
 
 function populateAddEmployeeForm() {
-  const emails = signedUpEmployeeEmails();
-  fillBasicSelect(els.addEmployeeEmail, emails, emails.length ? "Choose signed-up Gmail" : "No signed-up Gmail available");
-  fillBasicSelect(els.addEmployeeDepartment, unique(departments, "Department Name"), "Choose department");
-  fillBasicSelect(els.addEmployeeLocation, uniqueWithFallback(employees, "Location"), "Choose location");
-  els.addEmployeeEmail.disabled = emails.length === 0;
-  els.addEmployeeForm.querySelector("button[type='submit']").disabled = emails.length === 0;
-  els.addEmployeeName.value = emails.length ? nameFromEmail(emails[0]) : "";
-  setAddEmployeeMessage(
-    emails.length
-      ? "Only Gmail accounts created on the sign-up page can be added here."
-      : "No signed-up Gmail accounts are available to add.",
-    emails.length ? "" : "error",
+  if (!els.addEmployeeForm) return;
+  els.addEmployeeDepartment.innerHTML = [
+    `<option value="" selected disabled>Choose department</option>`,
+    ...unique(departments, "Department Name").map((department) => `<option value="${escapeHtml(department)}">${escapeHtml(department)}</option>`),
+  ].join("");
+
+  els.addEmployeeLevel.innerHTML = optionList(
+    ["Associate", "Specialist", "Senior Specialist", "Lead", "Manager", "Senior Manager"],
+    "Associate",
   );
+  els.addEmployeeLocation.innerHTML = optionList(uniqueWithFallback(employees, "Location"), "Remote");
+  els.addEmployeeStatus.innerHTML = optionList(["Active", "Contractor", "On Leave"], "Active");
+  els.addEmployeeForm.elements.manager.value = "Department PMO";
 }
 
 function openAddEmployeePanel() {
+  if (!isAdminDashboardRoute() || !isAdminSession()) return;
   populateAddEmployeeForm();
   els.addEmployeePanel.hidden = false;
-  els.addEmployeeEmail.focus();
+  setAddEmployeeMessage("");
+  els.addEmployeeForm.elements.email.focus();
 }
 
 function closeAddEmployeePanel() {
+  if (!els.addEmployeePanel) return;
   els.addEmployeePanel.hidden = true;
   els.addEmployeeForm.reset();
   setAddEmployeeMessage("");
-  els.openAddEmployee.focus();
+  els.openAddEmployee?.focus();
 }
 
-function openAdminPasswordModal() {
-  els.adminPasswordForm.reset();
-  els.adminPasswordMessage.textContent = "";
-  els.adminPasswordModal.classList.add("open");
-  els.adminPasswordModal.setAttribute("aria-hidden", "false");
-  els.adminPasswordScrim.hidden = false;
-  requestAnimationFrame(() => els.adminPasswordScrim.classList.add("open"));
-  els.adminPasswordInput.focus();
-}
-
-function closeAdminPasswordModal() {
-  els.adminPasswordModal.classList.remove("open");
-  els.adminPasswordModal.setAttribute("aria-hidden", "true");
-  els.adminPasswordScrim.classList.remove("open");
-  window.setTimeout(() => {
-    if (!els.adminPasswordScrim.classList.contains("open")) {
-      els.adminPasswordScrim.hidden = true;
-    }
-  }, 180);
-  els.adminButton.focus();
-}
-
-function submitAdminPassword(event) {
+async function submitAddEmployeeForm(event) {
   event.preventDefault();
-  if (els.adminPasswordInput.value !== "password") {
-    els.adminPasswordMessage.textContent = "Incorrect password.";
-    els.adminPasswordInput.select();
+
+  if (!isAdminSession()) {
+    setAddEmployeeMessage("Admin access is required.", "error");
     return;
   }
 
-  window.sessionStorage.setItem(
-    adminSessionKey,
-    JSON.stringify({
-      ok: true,
-      signedInAt: new Date().toISOString(),
-    }),
-  );
-  window.location.href = "admin.html";
-}
-
-async function submitAddEmployee(event) {
-  event.preventDefault();
-  const form = new FormData(els.addEmployeeForm);
-  const payload = Object.fromEntries(form.entries());
+  const payload = Object.fromEntries(new FormData(els.addEmployeeForm).entries());
   const submit = els.addEmployeeForm.querySelector("button[type='submit']");
 
-  if (!payload.email) {
-    setAddEmployeeMessage("Choose a signed-up Gmail account first.", "error");
-    return;
-  }
-
   submit.disabled = true;
-  setAddEmployeeMessage("Adding employee to sample_data.xlsx...");
+  setAddEmployeeMessage("Creating employee...");
 
   try {
     const response = await fetch("/api/employees", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: adminRequestHeaders(),
       body: JSON.stringify(payload),
     });
     const result = await response.json();
     if (!response.ok) {
-      throw new Error(result.error || "Could not add employee.");
+      throw new Error(result.error || "Could not create employee.");
     }
 
     employees.push(result.employee);
-    removeUsedAccounts();
     state.employeePage = 1;
-    fillSelect(
-      els.employeeStatusFilter,
-      uniqueWithFallback(employees, "Employment Status"),
-      state.employeeStatus,
-    );
-    fillSelect(
-      els.employeeLocationFilter,
-      uniqueWithFallback(employees, "Location"),
-      state.employeeLocation,
-    );
     render();
-    setAddEmployeeMessage(`${result.employee["Employee Name"]} was added to sample_data.xlsx and the dashboard.`, "success");
-    window.setTimeout(closeAddEmployeePanel, 900);
+    setAddEmployeeMessage(`${result.employee["Employee Name"]} was added to the employee directory.`, "success");
+    window.setTimeout(closeAddEmployeePanel, 800);
   } catch (error) {
     setAddEmployeeMessage(error.message, "error");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function setAddProjectMessage(message, type = "") {
+  if (!els.addProjectMessage) return;
+  els.addProjectMessage.textContent = message;
+  els.addProjectMessage.className = `employee-add-message ${type}`.trim();
+}
+
+function populateAddProjectForm() {
+  if (!els.addProjectForm) return;
+
+  els.addProjectDepartment.innerHTML = [
+    `<option value="" selected disabled>Choose department</option>`,
+    ...unique(departments, "Department Name").map((department) => `<option value="${escapeHtml(department)}">${escapeHtml(department)}</option>`),
+  ].join("");
+  els.addProjectOwner.innerHTML = [
+    `<option value="" selected disabled>Choose owner</option>`,
+    ...employees
+      .slice()
+      .sort((a, b) => text(a["Employee Name"]).localeCompare(text(b["Employee Name"])))
+      .map(
+        (employee) =>
+          `<option value="${escapeHtml(text(employee["Employee ID"]))}">${escapeHtml(text(employee["Employee Name"]))} (${escapeHtml(text(employee.Department))})</option>`,
+      ),
+  ].join("");
+  els.addProjectStatus.innerHTML = optionList(["Not Started", "Planning", "In Progress", "At Risk", "On Hold", "Completed"], "Planning");
+  els.addProjectPriority.innerHTML = optionList(["Low", "Medium", "High", "Critical"], "Medium");
+  els.addProjectRisk.innerHTML = optionList(["Low", "Medium", "High"], "Medium");
+  els.addProjectForm.elements.startDate.value = todayInputValue();
+}
+
+function openAddProjectPanel() {
+  if (!isAdminDashboardRoute() || !isAdminSession()) return;
+  populateAddProjectForm();
+  els.addProjectPanel.hidden = false;
+  setAddProjectMessage("");
+  els.addProjectForm.elements.projectName.focus();
+}
+
+function closeAddProjectPanel() {
+  if (!els.addProjectPanel) return;
+  els.addProjectPanel.hidden = true;
+  els.addProjectForm.reset();
+  setAddProjectMessage("");
+  els.openAddProject?.focus();
+}
+
+async function submitAddProjectForm(event) {
+  event.preventDefault();
+
+  if (!isAdminSession()) {
+    setAddProjectMessage("Admin access is required.", "error");
+    return;
+  }
+
+  const payload = Object.fromEntries(new FormData(els.addProjectForm).entries());
+  payload.startDate = dateInputToExcelSerial(payload.startDate);
+  payload.targetEndDate = dateInputToExcelSerial(payload.targetEndDate);
+  const submit = els.addProjectForm.querySelector("button[type='submit']");
+
+  submit.disabled = true;
+  setAddProjectMessage("Creating project...");
+
+  try {
+    const response = await fetch("/api/projects", {
+      method: "POST",
+      headers: adminRequestHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not create project.");
+    }
+
+    projects.push(result.project);
+    render();
+    setAddProjectMessage(`${result.project["Project Name"]} was added to the portfolio table.`, "success");
+    window.setTimeout(closeAddProjectPanel, 800);
+  } catch (error) {
+    setAddProjectMessage(error.message, "error");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function openEmployeeEditForm() {
+  const section = document.querySelector("#employeeEditSection");
+  if (!section) return;
+  section.hidden = false;
+  section.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  section.querySelector("input, select, button")?.focus({ preventScroll: true });
+}
+
+function closeEmployeeEditForm() {
+  const section = document.querySelector("#employeeEditSection");
+  if (!section) return;
+  section.hidden = true;
+}
+
+async function submitEmployeeEditForm(event) {
+  const form = event.target.closest("[data-employee-edit-form]");
+  if (!form) return;
+  event.preventDefault();
+
+  if (!isAdminSession()) {
+    setEmployeeEditMessage(form, "Admin access is required.", "error");
+    return;
+  }
+
+  const employeeId = form.dataset.employeeId;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  const submit = form.querySelector("button[type='submit']");
+
+  submit.disabled = true;
+  setEmployeeEditMessage(form, "Saving employee changes...");
+
+  try {
+    const response = await fetch(`/api/employees/${encodeURIComponent(employeeId)}`, {
+      method: "PATCH",
+      headers: adminRequestHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not update employee.");
+    }
+
+    const index = employees.findIndex((employee) => text(employee["Employee ID"]) === text(employeeId));
+    if (index >= 0) {
+      employees[index] = result.employee;
+    }
+    render();
+    renderEmployeeDetails(result.employee);
+    const refreshedForm = document.querySelector("[data-employee-edit-form]");
+    if (refreshedForm) {
+      setEmployeeEditMessage(refreshedForm, "Employee changes saved.", "success");
+    }
+  } catch (error) {
+    setEmployeeEditMessage(form, error.message, "error");
+    submit.disabled = false;
+  }
+}
+
+function handleEmployeeDetailAction(event) {
+  if (event.target.closest("[data-open-employee-edit]")) {
+    openEmployeeEditForm();
+    return;
+  }
+  if (event.target.closest("[data-cancel-employee-edit]")) {
+    closeEmployeeEditForm();
+  }
+}
+
+function setTaskEditMessage(form, message, type = "") {
+  const messageEl = form.querySelector("[data-task-edit-message]");
+  if (!messageEl) return;
+  messageEl.textContent = message;
+  messageEl.className = `task-edit-message ${type}`.trim();
+}
+
+function setAddTaskMessage(message, type = "") {
+  els.addTaskMessage.textContent = message;
+  els.addTaskMessage.className = `task-edit-message ${type}`.trim();
+}
+
+function populateAddTaskForm() {
+  els.addTaskProject.innerHTML = optionPairs(
+    projects
+      .slice()
+      .sort((a, b) => text(a["Project Name"]).localeCompare(text(b["Project Name"])))
+      .map((project) => ({
+        value: text(project["Project ID"]),
+        label: `${text(project["Project Name"])} (${text(project["Project ID"])})`,
+      })),
+  );
+  els.addTaskAssignee.innerHTML = optionPairs(
+    employees
+      .slice()
+      .sort((a, b) => text(a["Employee Name"]).localeCompare(text(b["Employee Name"])))
+      .map((employee) => ({
+        value: text(employee["Employee ID"]),
+        label: `${text(employee["Employee Name"])} (${text(employee.Department)})`,
+      })),
+  );
+  els.addTaskStatus.innerHTML = optionList(taskStatuses, "Backlog");
+  els.addTaskPriority.innerHTML = optionList(taskPriorities, "Medium");
+  els.addTaskForm.elements.dueDate.value = todayInputValue();
+}
+
+function openAddTaskPanel() {
+  if (!isAdminSession()) return;
+  populateAddTaskForm();
+  els.addTaskPanel.hidden = false;
+  setAddTaskMessage("");
+  els.addTaskForm.elements.taskName.focus();
+}
+
+function closeAddTaskPanel() {
+  els.addTaskPanel.hidden = true;
+  els.addTaskForm.reset();
+  setAddTaskMessage("");
+  els.openAddTask.focus();
+}
+
+async function submitAddTaskForm(event) {
+  event.preventDefault();
+
+  if (!isAdminSession()) {
+    setAddTaskMessage("Admin access is required.", "error");
+    return;
+  }
+
+  const payload = Object.fromEntries(new FormData(els.addTaskForm).entries());
+  payload.dueDate = dateInputToExcelSerial(payload.dueDate);
+  const submit = els.addTaskForm.querySelector("button[type='submit']");
+
+  submit.disabled = true;
+  setAddTaskMessage("Creating task...");
+
+  try {
+    const response = await fetch("/api/tasks", {
+      method: "POST",
+      headers: adminRequestHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not create task.");
+    }
+
+    tasks.push(result.task);
+    state.taskPage = 1;
+    render();
+    setAddTaskMessage(`${result.task["Task ID"]} was added to the task list.`, "success");
+    window.setTimeout(closeAddTaskPanel, 800);
+  } catch (error) {
+    setAddTaskMessage(error.message, "error");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function openTaskTableEdit(button) {
+  const row = button.closest("[data-task-id]");
+  const editRow = row?.nextElementSibling;
+  if (!editRow?.matches("[data-task-edit-row]")) return;
+  editRow.hidden = false;
+  editRow.querySelector("input, select, button")?.focus({ preventScroll: true });
+}
+
+function closeTaskTableEdit(button) {
+  const editRow = button.closest("[data-task-edit-row]");
+  const form = editRow?.querySelector("[data-task-table-edit-form]");
+  if (form) setTaskEditMessage(form, "");
+  if (editRow) editRow.hidden = true;
+}
+
+function handleTaskTableAction(event) {
+  const openButton = event.target.closest("[data-open-task-table-edit]");
+  if (openButton) {
+    openTaskTableEdit(openButton);
+    return;
+  }
+
+  const cancelButton = event.target.closest("[data-cancel-task-table-edit]");
+  if (cancelButton) {
+    closeTaskTableEdit(cancelButton);
+  }
+}
+
+async function submitTaskTableEditForm(event) {
+  const form = event.target.closest("[data-task-table-edit-form]");
+  if (!form) return;
+  event.preventDefault();
+
+  if (!isAdminSession()) {
+    setTaskEditMessage(form, "Admin access is required.", "error");
+    return;
+  }
+
+  const taskId = form.dataset.taskId;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  payload.dueDate = dateInputToExcelSerial(payload.dueDate);
+
+  const submit = form.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setTaskEditMessage(form, "Saving task...");
+
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      headers: adminRequestHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not update task.");
+    }
+
+    const index = tasks.findIndex((task) => text(task["Task ID"]) === text(taskId));
+    if (index >= 0) {
+      tasks[index] = { ...tasks[index], ...result.task };
+    }
+    render();
+  } catch (error) {
+    setTaskEditMessage(form, error.message, "error");
+    submit.disabled = false;
+  }
+}
+
+function setProjectEditMessage(form, message, type = "") {
+  const messageEl = form.querySelector("[data-project-edit-message]");
+  if (!messageEl) return;
+  messageEl.textContent = message;
+  messageEl.className = `employee-add-message project-edit-message ${type}`.trim();
+}
+
+function openProjectTableEdit(button) {
+  const row = button.closest("[data-project-id]");
+  const editRow = row?.nextElementSibling;
+  if (!editRow?.matches("[data-project-edit-row]")) return;
+  editRow.hidden = false;
+  editRow.querySelector("input, select, button")?.focus({ preventScroll: true });
+}
+
+function closeProjectTableEdit(button) {
+  const editRow = button.closest("[data-project-edit-row]");
+  const form = editRow?.querySelector("[data-project-table-edit-form]");
+  if (form) setProjectEditMessage(form, "");
+  if (editRow) editRow.hidden = true;
+}
+
+function handleProjectTableAction(event) {
+  const openButton = event.target.closest("[data-open-project-table-edit]");
+  if (openButton) {
+    openProjectTableEdit(openButton);
+    return;
+  }
+
+  const cancelButton = event.target.closest("[data-cancel-project-table-edit]");
+  if (cancelButton) {
+    closeProjectTableEdit(cancelButton);
+  }
+}
+
+async function submitProjectTableEditForm(event) {
+  const form = event.target.closest("[data-project-table-edit-form]");
+  if (!form) return;
+  event.preventDefault();
+
+  if (!isAdminSession()) {
+    setProjectEditMessage(form, "Admin access is required.", "error");
+    return;
+  }
+
+  const projectId = form.dataset.projectId;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  payload.startDate = dateInputToExcelSerial(payload.startDate);
+  payload.targetEndDate = dateInputToExcelSerial(payload.targetEndDate);
+
+  const submit = form.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setProjectEditMessage(form, "Saving project...");
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      headers: adminRequestHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not update project.");
+    }
+
+    const index = projects.findIndex((project) => text(project["Project ID"]) === text(projectId));
+    if (index >= 0) {
+      projects[index] = { ...projects[index], ...result.project };
+    }
+    render();
+  } catch (error) {
+    setProjectEditMessage(form, error.message, "error");
     submit.disabled = false;
   }
 }
@@ -1209,18 +1911,26 @@ function progressPageUrl() {
   if (state.search) params.set("search", state.search);
 
   const query = params.toString();
-  return `progress.html${query ? `?${query}` : ""}`;
+  const path = isAdminSession() ? "/progress2admins" : "/progress";
+  return `${path}${query ? `?${query}` : ""}`;
 }
 
 function statusPageUrl(status, type = "project") {
   const params = new URLSearchParams();
-  params.set("status", status);
-  params.set("type", type);
+  const statusPath = isAdminSession()
+    ? adminStatusPaths[status] || statusPaths[status] || ""
+    : statusPaths[status] || "";
+  if (!statusPath) {
+    params.set("status", status);
+    params.set("type", type);
+  }
   if (state.department !== "All") params.set("department", state.department);
   if (state.risk !== "All") params.set("risk", state.risk);
   if (state.search) params.set("search", state.search);
 
-  return `status.html?${params.toString()}`;
+  const path = statusPath || "/status";
+  const query = params.toString();
+  return `${path}${query ? `?${query}` : ""}`;
 }
 
 function drawerProjectRows() {
@@ -1474,10 +2184,16 @@ function handleStatusDrawerTabClick(event) {
   toggleStatusDrawer();
 }
 
-function logout() {
+async function logout() {
   window.localStorage.removeItem(authSessionKey);
+  window.sessionStorage.removeItem(adminSessionKey);
   document.documentElement.classList.remove("has-auth-session");
-  window.location.href = "signup.html";
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch (error) {
+    // The local session is already cleared; the login page will re-check access.
+  }
+  window.location.href = "/signup";
 }
 
 function render() {
@@ -1491,6 +2207,7 @@ function render() {
   renderActivity();
   renderEmployees();
   renderTable();
+  renderTasks();
   if (els.statusDrawer.classList.contains("open")) {
     renderStatusDrawer();
   }
@@ -1507,6 +2224,25 @@ function init() {
         : "";
   } else if (els.accountBlock) {
     els.accountBlock.hidden = true;
+  }
+  if (els.openAddTask) {
+    els.openAddTask.hidden = !isAdminSession();
+  }
+  if (els.openAddEmployee) {
+    if (!isAdminDashboardRoute()) {
+      els.openAddEmployee.remove();
+      els.openAddEmployee = null;
+    } else {
+      els.openAddEmployee.hidden = !isAdminSession();
+    }
+  }
+  if (els.openAddProject) {
+    if (!isAdminDashboardRoute()) {
+      els.openAddProject.remove();
+      els.openAddProject = null;
+    } else {
+      els.openAddProject.hidden = !isAdminSession();
+    }
   }
 
   fillSelect(els.departmentFilter, unique(departments, "Department Name"), state.department);
@@ -1532,19 +2268,23 @@ function init() {
   els.departmentFilter.addEventListener("change", (event) => {
     state.department = event.target.value;
     state.employeePage = 1;
+    state.taskPage = 1;
     render();
   });
   els.statusFilter.addEventListener("change", (event) => {
     state.status = event.target.value;
+    state.taskPage = 1;
     render();
   });
   els.riskFilter.addEventListener("change", (event) => {
     state.risk = event.target.value;
+    state.taskPage = 1;
     render();
   });
   els.searchFilter.addEventListener("input", (event) => {
     state.search = event.target.value.trim();
     state.employeePage = 1;
+    state.taskPage = 1;
     render();
   });
   els.resetFilters.addEventListener("click", () => {
@@ -1556,6 +2296,7 @@ function init() {
     state.employeeStatus = "All";
     state.employeeLocation = "All";
     state.employeePage = 1;
+    state.taskPage = 1;
     els.departmentFilter.value = "All";
     els.statusFilter.value = "All";
     els.riskFilter.value = "All";
@@ -1573,17 +2314,8 @@ function init() {
   els.closeStatusDrawer.addEventListener("click", closeStatusDrawer);
   els.sheetScrim.addEventListener("click", closeStatusDrawer);
   els.statusDrawerBody.addEventListener("click", handleStatusDrawerAction);
-  els.adminButton.addEventListener("click", openAdminPasswordModal);
-  els.adminPasswordForm.addEventListener("submit", submitAdminPassword);
-  els.closeAdminPassword.addEventListener("click", closeAdminPasswordModal);
-  els.cancelAdminPassword.addEventListener("click", closeAdminPasswordModal);
-  els.adminPasswordScrim.addEventListener("click", closeAdminPasswordModal);
   els.logoutButton.addEventListener("click", logout);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && els.adminPasswordModal.classList.contains("open")) {
-      closeAdminPasswordModal();
-      return;
-    }
     if (event.key === "Escape" && els.employeeDetailDrawer.classList.contains("open")) {
       closeEmployeeDetails();
       return;
@@ -1596,15 +2328,8 @@ function init() {
   els.employeeTable.addEventListener("keydown", handleEmployeeTableKeydown);
   els.closeEmployeeDetail.addEventListener("click", closeEmployeeDetails);
   els.employeeDetailScrim.addEventListener("click", closeEmployeeDetails);
-  els.openAddEmployee.addEventListener("click", openAddEmployeePanel);
-  els.closeAddEmployee.addEventListener("click", closeAddEmployeePanel);
-  els.cancelAddEmployee.addEventListener("click", closeAddEmployeePanel);
-  els.addEmployeeEmail.addEventListener("change", (event) => {
-    if (!els.addEmployeeName.value.trim()) {
-      els.addEmployeeName.value = nameFromEmail(event.target.value);
-    }
-  });
-  els.addEmployeeForm.addEventListener("submit", submitAddEmployee);
+  els.employeeDetailBody.addEventListener("click", handleEmployeeDetailAction);
+  els.employeeDetailBody.addEventListener("submit", submitEmployeeEditForm);
   els.employeeSearch.addEventListener("input", (event) => {
     state.employeeSearch = event.target.value.trim();
     state.employeePage = 1;
@@ -1633,6 +2358,44 @@ function init() {
     state.employeePage += 1;
     renderEmployees();
   });
+  if (isAdminSession() && els.openAddEmployee) {
+    els.openAddEmployee.addEventListener("click", openAddEmployeePanel);
+    els.closeAddEmployee.addEventListener("click", closeAddEmployeePanel);
+    els.cancelAddEmployee.addEventListener("click", closeAddEmployeePanel);
+    els.addEmployeeForm.addEventListener("submit", submitAddEmployeeForm);
+  }
+  if (isAdminSession() && els.openAddProject) {
+    els.openAddProject.addEventListener("click", openAddProjectPanel);
+    els.closeAddProject.addEventListener("click", closeAddProjectPanel);
+    els.cancelAddProject.addEventListener("click", closeAddProjectPanel);
+    els.addProjectForm.addEventListener("submit", submitAddProjectForm);
+  }
+  els.taskPageSize.addEventListener("change", (event) => {
+    state.taskPageSize = event.target.value === "all" ? "all" : Number(event.target.value);
+    state.taskPage = 1;
+    renderTasks();
+  });
+  els.taskPrev.addEventListener("click", () => {
+    state.taskPage = Math.max(state.taskPage - 1, 1);
+    renderTasks();
+  });
+  els.taskNext.addEventListener("click", () => {
+    state.taskPage += 1;
+    renderTasks();
+  });
+  els.taskTable.addEventListener("click", handleTaskTableAction);
+  els.taskTable.addEventListener("submit", submitTaskTableEditForm);
+
+  if (isAdminSession() && els.openAddTask) {
+    els.openAddTask.addEventListener("click", openAddTaskPanel);
+    els.closeAddTask.addEventListener("click", closeAddTaskPanel);
+    els.cancelAddTask.addEventListener("click", closeAddTaskPanel);
+    els.addTaskForm.addEventListener("submit", submitAddTaskForm);
+  }
+  if (els.projectTable) {
+    els.projectTable.addEventListener("click", handleProjectTableAction);
+    els.projectTable.addEventListener("submit", submitProjectTableEditForm);
+  }
 
   render();
 }

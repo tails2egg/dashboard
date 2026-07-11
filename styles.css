@@ -84,25 +84,6 @@ textarea {
   gap: 8px;
 }
 
-.topbar__admin {
-  min-height: 28px;
-  border: 1px solid rgba(22, 131, 122, 0.36);
-  border-radius: 6px;
-  background: rgba(22, 131, 122, 0.09);
-  color: var(--teal);
-  padding: 0 10px;
-  font-size: 0.76rem;
-  font-weight: 850;
-  cursor: pointer;
-}
-
-.topbar__admin:hover,
-.topbar__admin:focus-visible {
-  border-color: var(--teal);
-  background: rgba(22, 131, 122, 0.14);
-  outline: none;
-}
-
 .topbar__logout {
   min-height: 28px;
   border: 1px solid var(--line);
@@ -280,6 +261,14 @@ input:focus {
   margin-bottom: 16px;
 }
 
+.panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .panel__header--stack {
   margin-bottom: 12px;
 }
@@ -307,6 +296,17 @@ input:focus {
 
 .panel__tools .button {
   min-height: 34px;
+}
+
+.panel__rows {
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.panel__rows select {
+  min-height: 34px;
+  width: 92px;
 }
 
 .split-view {
@@ -719,6 +719,44 @@ input:focus {
   font-weight: 800;
 }
 
+.task-edit-toggle {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.task-edit-form {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(120px, 0.6fr) minmax(120px, 0.6fr) minmax(160px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.task-edit-message {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.task-edit-message.error {
+  color: var(--red);
+}
+
+.task-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.task-edit-actions .button {
+  min-height: 40px;
+}
+
 .chat-launcher {
   position: fixed;
   right: 22px;
@@ -1081,17 +1119,17 @@ input:focus {
   margin-bottom: 14px;
 }
 
+.employee-add-form {
+  display: grid;
+  gap: 12px;
+}
+
 .employee-add-panel {
   margin-bottom: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8fbfc;
   padding: 14px;
-}
-
-.employee-add-form {
-  display: grid;
-  gap: 12px;
 }
 
 .employee-add-form__header {
@@ -1174,6 +1212,100 @@ input:focus {
   min-width: 1240px;
 }
 
+.task-table-wrap {
+  max-height: 620px;
+}
+
+.task-table {
+  min-width: 1320px;
+}
+
+.task-add-panel {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfc;
+  padding: 14px;
+}
+
+.project-add-panel {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfc;
+  padding: 14px;
+}
+
+.task-add-form {
+  display: grid;
+  gap: 12px;
+}
+
+.task-table-edit {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.task-edit-row td {
+  background: #f8fbfc;
+}
+
+.task-table-edit-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.task-table-edit-form .task-edit-message {
+  align-self: center;
+}
+
+.task-table-edit-form .task-edit-actions {
+  align-self: end;
+}
+
+.project-table {
+  min-width: 1440px;
+}
+
+.project-add-form {
+  display: grid;
+  gap: 12px;
+}
+
+.project-add-grid,
+.project-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.project-table-edit {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+}
+
+.project-edit-row td {
+  background: #f8fbfc;
+}
+
+.project-edit-message {
+  align-self: center;
+}
+
+.project-edit-form .employee-add-actions {
+  align-self: end;
+}
+
+.table-muted {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
 .employee-row {
   cursor: pointer;
 }
@@ -1249,9 +1381,66 @@ input:focus {
   background: #f8fbfc;
 }
 
+.edit-drawer__body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.edit-drawer-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.edit-drawer-summary {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 13px;
+}
+
+.edit-drawer-summary span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.edit-drawer-summary strong {
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.edit-drawer .task-edit-form,
+.edit-drawer .project-edit-form {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.edit-drawer .task-edit-form {
+  grid-template-columns: 1fr;
+}
+
+.edit-drawer .task-edit-actions {
+  position: sticky;
+  bottom: -16px;
+  margin: 0 -14px -14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  padding: 12px 14px 14px;
+}
+
 .employee-detail-hero {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
   margin-bottom: 12px;
@@ -1284,6 +1473,10 @@ input:focus {
   color: var(--muted);
   font-size: 0.9rem;
   font-weight: 750;
+}
+
+.employee-detail-edit-button {
+  justify-self: end;
 }
 
 .employee-detail-grid,
@@ -1601,7 +1794,20 @@ tbody tr:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .task-edit-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-table-edit-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .employee-add-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-add-grid,
+  .project-edit-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1647,6 +1853,8 @@ tbody tr:hover {
   .employee-summary,
   .employee-controls,
   .employee-add-grid,
+  .task-edit-form,
+  .task-table-edit-form,
   .progress-project-list--page,
   .status-project-list {
     grid-template-columns: 1fr;

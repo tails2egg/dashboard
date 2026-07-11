@@ -1,4 +1,8 @@
 smtp.env
 .env.local
+.dashboard-accounts.json
+.dashboard-auth.sqlite3
+.dashboard-auth.sqlite3-*
+.dashboard-session-secret
 __pycache__/
 *.pyc

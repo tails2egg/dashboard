@@ -1,8 +1,11 @@
+import base64
+import hashlib
+import hmac
+from http.cookies import SimpleCookie
 import json
 import os
 import re
 import secrets
-import smtplib
 import ssl
 import datetime as dt
 import time
@@ -11,15 +14,94 @@ import urllib.parse
 import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
-from email.message import EmailMessage
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from auth_system import (
+    AccountNotVerified,
+    AuthError,
+    InvalidCredentials,
+    RateLimitExceeded,
+    UserAlreadyExists,
+    UserNotFound,
+    clear_users,
+    is_admin_email,
+    login_user,
+    register_user,
+    set_admin_emails,
+)
+from database import connect, init_auth_db
 from tools.export_data import workbook_to_json
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_JS_FILE = BASE_DIR / "dashboard-data.js"
+AUTH_DB_FILE = BASE_DIR / ".dashboard-auth.sqlite3"
+SESSION_SECRET_FILE = BASE_DIR / ".dashboard-session-secret"
+SESSION_COOKIE_NAME = "dashboardSession"
+SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+ADMIN_SESSION_TOKENS = {}
+PAGE_ROUTES = {
+    "/": "index.html",
+    "/dashboard": "index.html",
+    "/dashbaord": "index.html",
+    "/dashboard2admins": "index.html",
+    "/dashbaord2admins": "index.html",
+    "/login": "login.html",
+    "/log-in": "login.html",
+    "/log in": "login.html",
+    "/signup": "signup.html",
+    "/sign-up": "signup.html",
+    "/sign up": "signup.html",
+    "/progress": "progress.html",
+    "/progress2admins": "progress.html",
+    "/status": "status.html",
+    "/status2admins": "status.html",
+    "/clear-accounts": "clear-accounts.html",
+}
+ADMIN_STATUS_ROUTES = {
+    "/at-risk2admins": ("At Risk", "project"),
+    "/completed2admins": ("Completed", "project"),
+    "/planning2admins": ("Planning", "project"),
+    "/on-hold2admins": ("On Hold", "project"),
+    "/not-started2admins": ("Not Started", "project"),
+    "/in-review2admins": ("In Review", "task"),
+    "/backlog2admins": ("Backlog", "task"),
+    "/blocked2admins": ("Blocked", "task"),
+}
+PUBLIC_STATUS_ROUTES = {
+    "/at-risk": ("At Risk", "project"),
+    "/completed": ("Completed", "project"),
+    "/planning": ("Planning", "project"),
+    "/on-hold": ("On Hold", "project"),
+    "/not-started": ("Not Started", "project"),
+    "/in-review": ("In Review", "task"),
+    "/backlog": ("Backlog", "task"),
+    "/blocked": ("Blocked", "task"),
+}
+PAGE_ROUTES.update({route: "status.html" for route in ADMIN_STATUS_ROUTES})
+PAGE_ROUTES.update({route: "status.html" for route in PUBLIC_STATUS_ROUTES})
+NO_CACHE_FILES = {
+    "index.html",
+    "login.html",
+    "signup.html",
+    "progress.html",
+    "status.html",
+    "clear-accounts.html",
+    "dashboard-data.js",
+    "auth-guard.js",
+    "app.js",
+    "auth.js",
+    "progress.js",
+    "status.js",
+}
+ADMIN_PAGE_ROUTES = {
+    "/dashboard2admins",
+    "/dashbaord2admins",
+    "/progress2admins",
+    "/status2admins",
+    *ADMIN_STATUS_ROUTES,
+}
 XLSX_NS = {
     "a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -45,19 +127,79 @@ load_env_file(BASE_DIR / "smtp.env")
 load_env_file(BASE_DIR / ".env.local")
 
 
+def load_session_secret():
+    env_secret = os.environ.get("DASHBOARD_SESSION_SECRET")
+    if env_secret:
+        return env_secret.encode("utf-8")
+    if SESSION_SECRET_FILE.exists():
+        return SESSION_SECRET_FILE.read_text(encoding="utf-8").strip().encode("utf-8")
+    secret = secrets.token_hex(32)
+    SESSION_SECRET_FILE.write_text(secret, encoding="utf-8")
+    try:
+        SESSION_SECRET_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return secret.encode("utf-8")
+
+
+SESSION_SECRET = load_session_secret()
+
+
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 API_KEY = os.environ.get("GEMINI_API_KEY")
 DATA_FILE = BASE_DIR / "sample_data.xlsx"
 GMAIL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9._%+-]{0,62}[a-z0-9])?@gmail\.com$", re.IGNORECASE)
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-SMTP_HOST = os.environ.get("SMTP_HOST") or ("smtp.gmail.com" if SMTP_USER else "")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_FROM = os.environ.get("SMTP_FROM") or SMTP_USER
-SMTP_TLS = os.environ.get("SMTP_TLS", "1") != "0"
-EMAIL_VERIFICATION_MODE = os.environ.get("EMAIL_VERIFICATION_MODE", "auto").lower()
-VERIFICATION_TTL_SECONDS = 10 * 60
-VERIFICATION_CODES = {}
+EMPLOYEE_HEADERS = [
+    "Employee ID",
+    "Employee Name",
+    "Email",
+    "Department ID",
+    "Department",
+    "Job Title",
+    "Level",
+    "Manager",
+    "Location",
+    "Hire Date",
+    "Employment Status",
+]
+TASK_HEADERS = [
+    "Task ID",
+    "Project ID",
+    "Project",
+    "Task Name",
+    "Assigned To ID",
+    "Assigned To",
+    "Department ID",
+    "Department",
+    "Status",
+    "Priority",
+    "Due Date",
+    "Estimated Hours",
+    "Actual Hours",
+    "Completion %",
+]
+TASK_STATUSES = {"Backlog", "Not Started", "In Progress", "In Review", "Blocked", "Completed"}
+TASK_PRIORITIES = {"Low", "Medium", "High", "Critical"}
+PROJECT_HEADERS = [
+    "Project ID",
+    "Project Name",
+    "Department ID",
+    "Department",
+    "Owner ID",
+    "Owner",
+    "Status",
+    "Priority",
+    "Risk Level",
+    "Start Date",
+    "Target End Date",
+    "Progress %",
+    "Budget SAR",
+    "Actual Spend SAR",
+    "Strategic Theme",
+]
+PROJECT_STATUSES = {"Not Started", "Planning", "In Progress", "At Risk", "On Hold", "Completed"}
+PROJECT_PRIORITIES = {"Low", "Medium", "High", "Critical"}
+PROJECT_RISK_LEVELS = {"Low", "Medium", "High"}
 STOP_WORDS = {
     "a",
     "about",
@@ -103,8 +245,55 @@ def normalized_email(value):
     return text(value).lower()
 
 
+def verified_user_exists(email):
+    with connect(AUTH_DB_FILE) as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM users
+            WHERE email = ? AND status = 'verified' AND verified_at IS NOT NULL
+            """,
+            (normalized_email(email),),
+        ).fetchone()
+    return row is not None
+
+
+def session_cookie_header(email):
+    payload = {
+        "email": normalized_email(email),
+        "iat": int(time.time()),
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8")).decode("ascii").rstrip("=")
+    signature = hmac.new(SESSION_SECRET, encoded.encode("ascii"), hashlib.sha256).hexdigest()
+    token = f"{encoded}.{signature}"
+    return (
+        f"{SESSION_COOKIE_NAME}={token}; Path=/; Max-Age={SESSION_MAX_AGE_SECONDS}; "
+        "SameSite=Lax; HttpOnly"
+    )
+
+
+def clear_session_cookie_header():
+    return f"{SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly"
+
+
 def valid_gmail(value):
     return bool(GMAIL_PATTERN.fullmatch(text(value)))
+
+
+def employee_account_fields(email):
+    employee = next(
+        (
+            row
+            for row in EMPLOYEES
+            if normalized_email(row.get("Email")) == normalized_email(email)
+        ),
+        None,
+    )
+    return {
+        "employee_id": text(employee.get("Employee ID")) if employee else "",
+        "employee_name": text(employee.get("Employee Name")) if employee else "",
+        "department": text(employee.get("Department")) if employee else "",
+    }
 
 
 def number(value):
@@ -162,6 +351,21 @@ TASKS = DATA.get("Tasks", [])
 MEETINGS = DATA.get("Meetings", [])
 UPDATES = DATA.get("Weekly Updates", [])
 ACTIVITIES = DATA.get("Activity Log", [])
+ADMINS = DATA.get("Admins", [])
+init_auth_db(AUTH_DB_FILE)
+
+
+def active_admin_emails():
+    emails = []
+    for admin in ADMINS:
+        status = text(admin.get("Status") or admin.get("Admin Status") or "Active").lower()
+        if status and status != "active":
+            continue
+        emails.append(admin.get("Email"))
+    return emails
+
+
+set_admin_emails(active_admin_emails() or ["basil@gmail.com"])
 
 
 def write_dashboard_data_file():
@@ -171,7 +375,7 @@ def write_dashboard_data_file():
 
 
 def refresh_runtime_data():
-    global DATA, DEPARTMENTS, EMPLOYEES, PROJECTS, TASKS, MEETINGS, UPDATES, ACTIVITIES
+    global DATA, DEPARTMENTS, EMPLOYEES, PROJECTS, TASKS, MEETINGS, UPDATES, ACTIVITIES, ADMINS, DATA_SUMMARY
     DATA = load_dashboard_data()
     DEPARTMENTS = DATA.get("Departments", [])
     EMPLOYEES = DATA.get("Employees", [])
@@ -180,6 +384,14 @@ def refresh_runtime_data():
     MEETINGS = DATA.get("Meetings", [])
     UPDATES = DATA.get("Weekly Updates", [])
     ACTIVITIES = DATA.get("Activity Log", [])
+    ADMINS = DATA.get("Admins", [])
+    set_admin_emails(active_admin_emails() or ["basil@gmail.com"])
+    DATA_SUMMARY = build_summary()
+
+
+def sync_dashboard_data():
+    write_dashboard_data_file()
+    refresh_runtime_data()
 
 
 def excel_serial_today():
@@ -193,6 +405,60 @@ def next_employee_id():
 def department_by_name(name):
     target = text(name)
     return next((row for row in DEPARTMENTS if text(row.get("Department Name")) == target), None)
+
+
+def employee_by_id(employee_id):
+    target = text(employee_id)
+    return next((row for row in EMPLOYEES if text(row.get("Employee ID")) == target), None)
+
+
+def project_by_id(project_id):
+    target = text(project_id)
+    return next((row for row in PROJECTS if text(row.get("Project ID")) == target), None)
+
+
+def task_by_id(task_id):
+    target = text(task_id)
+    return next((row for row in TASKS if text(row.get("Task ID")) == target), None)
+
+
+def next_task_id():
+    max_id = 0
+    for task in TASKS:
+        match = re.fullmatch(r"T(\d+)", text(task.get("Task ID")))
+        if match:
+            max_id = max(max_id, int(match.group(1)))
+    return f"T{max_id + 1:04d}"
+
+
+def next_project_id():
+    max_id = 0
+    for project in PROJECTS:
+        match = re.fullmatch(r"P(\d+)", text(project.get("Project ID")))
+        if match:
+            max_id = max(max_id, int(match.group(1)))
+    return f"P{max_id + 1:04d}"
+
+
+def validated_number_field(value, label, *, minimum=0, maximum=None, allow_blank=True):
+    raw = text(value)
+    if not raw and allow_blank:
+        return ""
+    parsed = number(raw)
+    if parsed < minimum:
+        raise AuthError(f"{label} cannot be below {minimum:g}.")
+    if maximum is not None and parsed > maximum:
+        raise AuthError(f"{label} cannot be above {maximum:g}.")
+    return f"{parsed:g}"
+
+
+def create_admin_session(email):
+    normalized = normalized_email(email)
+    if not is_admin_email(normalized):
+        return ""
+    token = secrets.token_urlsafe(32)
+    ADMIN_SESSION_TOKENS[token] = normalized
+    return token
 
 
 def column_name(index):
@@ -252,6 +518,8 @@ def cell_column(cell):
 
 
 def cell_value(cell, shared_strings):
+    if cell is None:
+        return ""
     value = cell.find("a:v", XLSX_NS)
     inline = cell.find("a:is/a:t", XLSX_NS)
     if cell.attrib.get("t") == "s" and value is not None:
@@ -277,6 +545,17 @@ def set_numeric_cell_value(cell, value):
         cell.remove(child)
     node = ET.SubElement(cell, f"{{{XLSX_NS['a']}}}v")
     node.text = str(value)
+
+
+def replace_or_append_cell(row, column, cell):
+    existing = {cell_column(node): node for node in row.findall("a:c", XLSX_NS)}
+    old_cell = existing.get(column)
+    if old_cell is not None:
+        index = list(row).index(old_cell)
+        row.remove(old_cell)
+        row.insert(index, cell)
+        return
+    row.append(cell)
 
 
 def update_dashboard_employee_counts(worksheet, source, employee_rows):
@@ -322,23 +601,10 @@ def append_employee_to_workbook(employee):
             if int(existing_row.attrib.get("r", "0")) > last_data_row:
                 sheet_data.remove(existing_row)
 
-        ordered_headers = [
-            "Employee ID",
-            "Employee Name",
-            "Email",
-            "Department ID",
-            "Department",
-            "Job Title",
-            "Level",
-            "Manager",
-            "Location",
-            "Hire Date",
-            "Employment Status",
-        ]
         row_attributes = {key: value for key, value in template_row.attrib.items() if key != "r"}
         row_attributes["r"] = str(next_row)
         row = ET.Element(f"{{{XLSX_NS['a']}}}row", row_attributes)
-        for index, header in enumerate(ordered_headers, start=1):
+        for index, header in enumerate(EMPLOYEE_HEADERS, start=1):
             column = column_name(index)
             ref = f"{column}{next_row}"
             template_cell = template_cells.get(column)
@@ -393,6 +659,306 @@ def append_employee_to_workbook(employee):
     temp_file.replace(DATA_FILE)
 
 
+def update_employee_in_workbook(employee_id, employee):
+    target_id = text(employee_id)
+    updated_employee_rows = [
+        employee if text(row.get("Employee ID")) == target_id else row
+        for row in EMPLOYEES
+    ]
+
+    with zipfile.ZipFile(DATA_FILE) as source:
+        workbook = ET.fromstring(source.read("xl/workbook.xml"))
+        relations = ET.fromstring(source.read("xl/_rels/workbook.xml.rels"))
+        relation_paths = {relation.attrib["Id"]: relation.attrib["Target"] for relation in relations}
+        employee_sheet_path = sheet_path_by_name(workbook, relation_paths, "Employees")
+        dashboard_sheet_path = sheet_path_by_name(workbook, relation_paths, "Dashboard")
+
+        if not employee_sheet_path:
+            raise RuntimeError("Employees worksheet was not found.")
+
+        worksheet = ET.fromstring(source.read(employee_sheet_path))
+        sheet_data = worksheet.find("a:sheetData", XLSX_NS)
+        shared_strings = shared_string_values(source)
+        target_row = None
+
+        for row in sheet_data.findall("a:row", XLSX_NS):
+            cells = {cell_column(cell): cell for cell in row.findall("a:c", XLSX_NS)}
+            if text(cell_value(cells.get("A"), shared_strings)) == target_id:
+                target_row = row
+                break
+
+        if target_row is None:
+            raise RuntimeError("Employee row was not found.")
+
+        template_cells = {cell_column(cell): cell for cell in target_row.findall("a:c", XLSX_NS)}
+        row_number = target_row.attrib.get("r")
+        for index, header in enumerate(EMPLOYEE_HEADERS, start=1):
+            column = column_name(index)
+            ref = f"{column}{row_number}"
+            template_cell = template_cells.get(column)
+            if header == "Hire Date":
+                cell = numeric_cell(ref, employee[header], template_cell)
+            else:
+                cell = inline_cell(ref, employee[header], template_cell)
+            replace_or_append_cell(target_row, column, cell)
+
+        updated_sheet = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+        updated_dashboard_sheet = None
+        if dashboard_sheet_path:
+            dashboard_worksheet = ET.fromstring(source.read(dashboard_sheet_path))
+            update_dashboard_employee_counts(dashboard_worksheet, source, updated_employee_rows)
+            updated_dashboard_sheet = ET.tostring(
+                dashboard_worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        temp_file = DATA_FILE.with_suffix(".tmp.xlsx")
+        with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == employee_sheet_path:
+                    target.writestr(item, updated_sheet)
+                elif item.filename == dashboard_sheet_path and updated_dashboard_sheet is not None:
+                    target.writestr(item, updated_dashboard_sheet)
+                else:
+                    target.writestr(item, source.read(item.filename))
+    temp_file.replace(DATA_FILE)
+
+
+def task_cell(ref, header, value, template_cell=None):
+    numeric_headers = {"Due Date", "Estimated Hours", "Actual Hours", "Completion %"}
+    raw = text(value)
+    if header in numeric_headers and raw:
+        return numeric_cell(ref, raw, template_cell)
+    return inline_cell(ref, raw, template_cell)
+
+
+def project_cell(ref, header, value, template_cell=None):
+    numeric_headers = {"Start Date", "Target End Date", "Progress %", "Budget SAR", "Actual Spend SAR"}
+    raw = text(value)
+    if header in numeric_headers and raw:
+        return numeric_cell(ref, raw, template_cell)
+    return inline_cell(ref, raw, template_cell)
+
+
+def update_project_in_workbook(project_id, project):
+    target_id = text(project_id)
+
+    with zipfile.ZipFile(DATA_FILE) as source:
+        workbook = ET.fromstring(source.read("xl/workbook.xml"))
+        relations = ET.fromstring(source.read("xl/_rels/workbook.xml.rels"))
+        relation_paths = {relation.attrib["Id"]: relation.attrib["Target"] for relation in relations}
+        project_sheet_path = sheet_path_by_name(workbook, relation_paths, "Projects")
+
+        if not project_sheet_path:
+            raise RuntimeError("Projects worksheet was not found.")
+
+        worksheet = ET.fromstring(source.read(project_sheet_path))
+        sheet_data = worksheet.find("a:sheetData", XLSX_NS)
+        shared_strings = shared_string_values(source)
+        target_row = None
+
+        for row in sheet_data.findall("a:row", XLSX_NS):
+            cells = {cell_column(cell): cell for cell in row.findall("a:c", XLSX_NS)}
+            if text(cell_value(cells.get("A"), shared_strings)) == target_id:
+                target_row = row
+                break
+
+        if target_row is None:
+            raise RuntimeError("Project row was not found.")
+
+        template_cells = {cell_column(cell): cell for cell in target_row.findall("a:c", XLSX_NS)}
+        row_number = target_row.attrib.get("r")
+        for index, header in enumerate(PROJECT_HEADERS, start=1):
+            column = column_name(index)
+            ref = f"{column}{row_number}"
+            cell = project_cell(ref, header, project.get(header), template_cells.get(column))
+            replace_or_append_cell(target_row, column, cell)
+
+        updated_sheet = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+        temp_file = DATA_FILE.with_suffix(".tmp.xlsx")
+        with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == project_sheet_path:
+                    target.writestr(item, updated_sheet)
+                else:
+                    target.writestr(item, source.read(item.filename))
+    temp_file.replace(DATA_FILE)
+
+
+def append_project_to_workbook(project):
+    with zipfile.ZipFile(DATA_FILE) as source:
+        workbook = ET.fromstring(source.read("xl/workbook.xml"))
+        relations = ET.fromstring(source.read("xl/_rels/workbook.xml.rels"))
+        relation_paths = {relation.attrib["Id"]: relation.attrib["Target"] for relation in relations}
+        project_sheet_path = sheet_path_by_name(workbook, relation_paths, "Projects")
+
+        if not project_sheet_path:
+            raise RuntimeError("Projects worksheet was not found.")
+
+        worksheet = ET.fromstring(source.read(project_sheet_path))
+        sheet_data = worksheet.find("a:sheetData", XLSX_NS)
+        existing_rows = sheet_data.findall("a:row", XLSX_NS)
+        last_row_number = max(int(row.attrib.get("r", "0")) for row in existing_rows)
+        next_row = last_row_number + 1
+        template_row = next(
+            (row for row in existing_rows if int(row.attrib.get("r", "0")) == last_row_number),
+            existing_rows[-1],
+        )
+        template_cells = {cell_column(cell): cell for cell in template_row.findall("a:c", XLSX_NS)}
+
+        row_attributes = {key: value for key, value in template_row.attrib.items() if key != "r"}
+        row_attributes["r"] = str(next_row)
+        row = ET.Element(f"{{{XLSX_NS['a']}}}row", row_attributes)
+        for index, header in enumerate(PROJECT_HEADERS, start=1):
+            column = column_name(index)
+            ref = f"{column}{next_row}"
+            row.append(project_cell(ref, header, project.get(header), template_cells.get(column)))
+        sheet_data.append(row)
+
+        dimension = worksheet.find("a:dimension", XLSX_NS)
+        if dimension is not None:
+            dimension.set("ref", f"A1:O{next_row}")
+
+        table_paths = []
+        rels_path = f"{Path(project_sheet_path).parent.as_posix()}/_rels/{Path(project_sheet_path).name}.rels"
+        if rels_path in source.namelist():
+            rels = ET.fromstring(source.read(rels_path))
+            for relation in rels:
+                if relation.attrib.get("Type", "").endswith("/table"):
+                    table_paths.append(target_to_zip_path(project_sheet_path, relation.attrib["Target"]))
+
+        updated_sheet = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+        updated_tables = {}
+        for table_path in table_paths:
+            table = ET.fromstring(source.read(table_path))
+            table.set("ref", f"A1:O{next_row}")
+            auto_filter = table.find("a:autoFilter", XLSX_NS)
+            if auto_filter is not None:
+                auto_filter.set("ref", f"A1:O{next_row}")
+            updated_tables[table_path] = ET.tostring(table, encoding="utf-8", xml_declaration=True)
+
+        temp_file = DATA_FILE.with_suffix(".tmp.xlsx")
+        with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == project_sheet_path:
+                    target.writestr(item, updated_sheet)
+                elif item.filename in updated_tables:
+                    target.writestr(item, updated_tables[item.filename])
+                else:
+                    target.writestr(item, source.read(item.filename))
+    temp_file.replace(DATA_FILE)
+
+
+def append_task_to_workbook(task):
+    with zipfile.ZipFile(DATA_FILE) as source:
+        workbook = ET.fromstring(source.read("xl/workbook.xml"))
+        relations = ET.fromstring(source.read("xl/_rels/workbook.xml.rels"))
+        relation_paths = {relation.attrib["Id"]: relation.attrib["Target"] for relation in relations}
+        task_sheet_path = sheet_path_by_name(workbook, relation_paths, "Tasks")
+
+        if not task_sheet_path:
+            raise RuntimeError("Tasks worksheet was not found.")
+
+        worksheet = ET.fromstring(source.read(task_sheet_path))
+        sheet_data = worksheet.find("a:sheetData", XLSX_NS)
+        existing_rows = sheet_data.findall("a:row", XLSX_NS)
+        last_row_number = max(int(row.attrib.get("r", "0")) for row in existing_rows)
+        next_row = last_row_number + 1
+        template_row = next(
+            (row for row in existing_rows if int(row.attrib.get("r", "0")) == last_row_number),
+            existing_rows[-1],
+        )
+        template_cells = {cell_column(cell): cell for cell in template_row.findall("a:c", XLSX_NS)}
+
+        row_attributes = {key: value for key, value in template_row.attrib.items() if key != "r"}
+        row_attributes["r"] = str(next_row)
+        row = ET.Element(f"{{{XLSX_NS['a']}}}row", row_attributes)
+        for index, header in enumerate(TASK_HEADERS, start=1):
+            column = column_name(index)
+            ref = f"{column}{next_row}"
+            row.append(task_cell(ref, header, task.get(header), template_cells.get(column)))
+        sheet_data.append(row)
+
+        dimension = worksheet.find("a:dimension", XLSX_NS)
+        if dimension is not None:
+            dimension.set("ref", f"A1:N{next_row}")
+
+        table_paths = []
+        rels_path = f"{Path(task_sheet_path).parent.as_posix()}/_rels/{Path(task_sheet_path).name}.rels"
+        if rels_path in source.namelist():
+            rels = ET.fromstring(source.read(rels_path))
+            for relation in rels:
+                if relation.attrib.get("Type", "").endswith("/table"):
+                    table_paths.append(target_to_zip_path(task_sheet_path, relation.attrib["Target"]))
+
+        updated_sheet = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+        updated_tables = {}
+        for table_path in table_paths:
+            table = ET.fromstring(source.read(table_path))
+            table.set("ref", f"A1:N{next_row}")
+            auto_filter = table.find("a:autoFilter", XLSX_NS)
+            if auto_filter is not None:
+                auto_filter.set("ref", f"A1:N{next_row}")
+            updated_tables[table_path] = ET.tostring(table, encoding="utf-8", xml_declaration=True)
+
+        temp_file = DATA_FILE.with_suffix(".tmp.xlsx")
+        with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == task_sheet_path:
+                    target.writestr(item, updated_sheet)
+                elif item.filename in updated_tables:
+                    target.writestr(item, updated_tables[item.filename])
+                else:
+                    target.writestr(item, source.read(item.filename))
+    temp_file.replace(DATA_FILE)
+
+
+def update_task_in_workbook(task_id, task):
+    target_id = text(task_id)
+
+    with zipfile.ZipFile(DATA_FILE) as source:
+        workbook = ET.fromstring(source.read("xl/workbook.xml"))
+        relations = ET.fromstring(source.read("xl/_rels/workbook.xml.rels"))
+        relation_paths = {relation.attrib["Id"]: relation.attrib["Target"] for relation in relations}
+        task_sheet_path = sheet_path_by_name(workbook, relation_paths, "Tasks")
+
+        if not task_sheet_path:
+            raise RuntimeError("Tasks worksheet was not found.")
+
+        worksheet = ET.fromstring(source.read(task_sheet_path))
+        sheet_data = worksheet.find("a:sheetData", XLSX_NS)
+        shared_strings = shared_string_values(source)
+        target_row = None
+
+        for row in sheet_data.findall("a:row", XLSX_NS):
+            cells = {cell_column(cell): cell for cell in row.findall("a:c", XLSX_NS)}
+            if text(cell_value(cells.get("A"), shared_strings)) == target_id:
+                target_row = row
+                break
+
+        if target_row is None:
+            raise RuntimeError("Task row was not found.")
+
+        template_cells = {cell_column(cell): cell for cell in target_row.findall("a:c", XLSX_NS)}
+        row_number = target_row.attrib.get("r")
+        for index, header in enumerate(TASK_HEADERS, start=1):
+            column = column_name(index)
+            ref = f"{column}{row_number}"
+            cell = task_cell(ref, header, task.get(header), template_cells.get(column))
+            replace_or_append_cell(target_row, column, cell)
+
+        updated_sheet = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+        temp_file = DATA_FILE.with_suffix(".tmp.xlsx")
+        with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                if item.filename == task_sheet_path:
+                    target.writestr(item, updated_sheet)
+                else:
+                    target.writestr(item, source.read(item.filename))
+    temp_file.replace(DATA_FILE)
+
+
 def build_summary():
     budget = sum(number(row.get("Budget SAR")) for row in PROJECTS)
     spend = sum(number(row.get("Actual Spend SAR")) for row in PROJECTS)
@@ -423,51 +989,6 @@ def build_summary():
 
 
 DATA_SUMMARY = build_summary()
-
-
-def cleanup_verification_codes():
-    now = time.time()
-    expired = [
-        email
-        for email, record in VERIFICATION_CODES.items()
-        if now > record.get("expires_at", 0)
-    ]
-    for email in expired:
-        VERIFICATION_CODES.pop(email, None)
-
-
-def send_verification_email(email, code):
-    if not SMTP_HOST or not SMTP_FROM:
-        raise RuntimeError(
-            "Email verification is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM."
-        )
-
-    message = EmailMessage()
-    message["From"] = SMTP_FROM
-    message["To"] = email
-    message["Subject"] = "Your EOD verification code"
-    message.set_content(
-        "\n".join(
-            [
-                "Use this code to finish creating your EOD dashboard account:",
-                "",
-                code,
-                "",
-                "This code expires in 10 minutes.",
-            ]
-        )
-    )
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-        if SMTP_TLS:
-            smtp.starttls()
-        if SMTP_USER or SMTP_PASSWORD:
-            smtp.login(SMTP_USER, SMTP_PASSWORD)
-        smtp.send_message(message)
-
-
-def can_send_email():
-    return bool(SMTP_HOST and SMTP_FROM)
 
 
 def has_any(question, terms):
@@ -758,28 +1279,198 @@ def parse_gemini_error(details):
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
+    def authenticated_email(self):
+        cookie_header = self.headers.get("Cookie", "")
+        cookie = SimpleCookie()
+        try:
+            cookie.load(cookie_header)
+        except Exception:
+            return ""
+
+        morsel = cookie.get(SESSION_COOKIE_NAME)
+        if not morsel:
+            return ""
+
+        token = morsel.value
+        try:
+            encoded, signature = token.rsplit(".", 1)
+        except ValueError:
+            return ""
+
+        expected = hmac.new(SESSION_SECRET, encoded.encode("ascii"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return ""
+
+        try:
+            padded = encoded + ("=" * (-len(encoded) % 4))
+            payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError):
+            return ""
+
+        email = normalized_email(payload.get("email"))
+        issued_at = int(payload.get("iat") or 0)
+        if not email or time.time() - issued_at > SESSION_MAX_AGE_SECONDS:
+            return ""
+
+        return email if verified_user_exists(email) else ""
+
+    def is_authenticated(self):
+        return bool(self.authenticated_email())
+
+    def is_protected_page_route(self, route):
+        page = PAGE_ROUTES.get(route)
+        return page in {"index.html", "progress.html", "status.html"} or route in {
+            "/index.html",
+            "/progress.html",
+            "/status.html",
+        }
+
+    def is_protected_asset_route(self, route):
+        return Path(urllib.parse.urlsplit(route).path).name in {
+            "dashboard-data.js",
+            "app.js",
+            "progress.js",
+            "status.js",
+            "chatbot.js",
+        }
+
+    def redirect_to_login(self):
+        url = urllib.parse.urlsplit(self.path)
+        next_path = url.path or "/dashboard"
+        if url.query:
+            next_path = f"{next_path}?{url.query}"
+        location = f"/login?next={urllib.parse.quote(next_path, safe='')}"
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
+    def redirect_to_dashboard(self):
+        self.send_response(302)
+        self.send_header("Location", "/dashboard")
+        self.end_headers()
+
+    def send_protected_asset_forbidden(self):
+        body = b"Log in to access dashboard content."
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def route_path(self):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
+        if path.endswith(".") and path.rstrip(".") in PAGE_ROUTES:
+            path = path.rstrip(".")
+        return path
+
+    def redirect_trailing_page_route(self):
+        url = urllib.parse.urlsplit(self.path)
+        path = urllib.parse.unquote(url.path)
+        if path == "/" or not path.endswith("/"):
+            return False
+
+        route = path.rstrip("/")
+        if route not in PAGE_ROUTES:
+            return False
+
+        location = urllib.parse.quote(route, safe="/-")
+        if url.query:
+            location = f"{location}?{url.query}"
+        self.send_response(308)
+        self.send_header("Location", location)
+        self.end_headers()
+        return True
+
+    def translate_path(self, path):
+        route = self.route_path()
+        page = PAGE_ROUTES.get(route)
+        if page:
+            return str(BASE_DIR / page)
+        return super().translate_path(path)
+
+    def do_GET(self):
+        if self.redirect_trailing_page_route():
+            return
+        route = self.route_path()
+        email = self.authenticated_email()
+        if not email:
+            if self.is_protected_page_route(route):
+                self.redirect_to_login()
+                return
+            if self.is_protected_asset_route(route):
+                self.send_protected_asset_forbidden()
+                return
+        elif route in ADMIN_PAGE_ROUTES and not is_admin_email(email):
+            self.redirect_to_dashboard()
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if self.redirect_trailing_page_route():
+            return
+        route = self.route_path()
+        email = self.authenticated_email()
+        if not email:
+            if self.is_protected_page_route(route):
+                self.redirect_to_login()
+                return
+            if self.is_protected_asset_route(route):
+                self.send_protected_asset_forbidden()
+                return
+        elif route in ADMIN_PAGE_ROUTES and not is_admin_email(email):
+            self.redirect_to_dashboard()
+            return
+        super().do_HEAD()
+
     def end_headers(self):
-        no_cache_paths = {"/", "/index.html", "/dashboard-data.js", "/app.js"}
-        if self.path.split("?", 1)[0] in no_cache_paths:
+        route = self.route_path()
+        page = PAGE_ROUTES.get(route)
+        request_file = Path(urllib.parse.urlsplit(route).path).name
+        if page in NO_CACHE_FILES or request_file in NO_CACHE_FILES:
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Pragma", "no-cache")
         super().end_headers()
 
     def do_POST(self):
-        if self.path == "/api/send-verification":
-            self.handle_send_verification()
+        request_path = urllib.parse.urlsplit(self.path).path
+
+        if request_path == "/api/auth/signup":
+            self.handle_auth_signup()
             return
 
-        if self.path == "/api/verify-email":
-            self.handle_verify_email()
+        if request_path == "/api/auth/login":
+            self.handle_auth_login()
             return
 
-        if self.path == "/api/employees":
+        if request_path == "/api/auth/logout":
+            self.send_json(200, {"ok": True}, headers={"Set-Cookie": clear_session_cookie_header()})
+            return
+
+        if request_path == "/api/auth/clear":
+            self.handle_auth_clear()
+            return
+
+        if request_path == "/api/employees":
             self.handle_add_employee()
             return
 
-        if self.path != "/api/chat":
+        if request_path == "/api/tasks":
+            self.handle_add_task()
+            return
+
+        if request_path == "/api/projects":
+            self.handle_add_project()
+            return
+
+        if request_path != "/api/chat":
             self.send_json(404, {"error": "Not found"})
+            return
+
+        if not self.is_authenticated():
+            self.send_json(401, {"error": "Log in to access dashboard content."})
             return
 
         try:
@@ -856,11 +1547,38 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         self.send_json(200, {"reply": reply})
 
+    def do_PATCH(self):
+        request_path = urllib.parse.urlsplit(self.path).path
+        employee_match = re.fullmatch(r"/api/employees/([^/]+)", request_path)
+        if employee_match:
+            employee_id = urllib.parse.unquote(employee_match.group(1))
+            self.handle_update_employee(employee_id)
+            return
+
+        task_match = re.fullmatch(r"/api/tasks/([^/]+)", request_path)
+        if task_match:
+            task_id = urllib.parse.unquote(task_match.group(1))
+            self.handle_update_task(task_id)
+            return
+
+        project_match = re.fullmatch(r"/api/projects/([^/]+)", request_path)
+        if project_match:
+            project_id = urllib.parse.unquote(project_match.group(1))
+            self.handle_update_project(project_id)
+            return
+
+        self.send_json(404, {"error": "Not found"})
+
     def read_json(self):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length) or b"{}")
 
-    def handle_send_verification(self):
+    def require_admin_session(self):
+        email = normalized_email(self.headers.get("X-Admin-Email"))
+        token = text(self.headers.get("X-Admin-Token"))
+        return bool(email and token and ADMIN_SESSION_TOKENS.get(token) == email and is_admin_email(email))
+
+    def handle_auth_signup(self):
         try:
             payload = self.read_json()
         except (ValueError, json.JSONDecodeError):
@@ -868,48 +1586,41 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         email = normalized_email(payload.get("email"))
-        if not valid_gmail(email):
-            self.send_json(400, {"error": "Enter a valid Gmail address."})
+        password = str(payload.get("password") or "")
+        if not email:
+            self.send_json(400, {"error": "Enter a valid email address."})
+            return
+        if len(password) < 8:
+            self.send_json(400, {"error": "Use at least 8 characters."})
             return
 
-        cleanup_verification_codes()
-        code = f"{secrets.randbelow(1000000):06d}"
-        VERIFICATION_CODES[email] = {
-            "code": code,
-            "expires_at": time.time() + VERIFICATION_TTL_SECONDS,
-            "attempts": 0,
-        }
-
-        if can_send_email():
-            try:
-                send_verification_email(email, code)
-            except (OSError, RuntimeError, smtplib.SMTPException) as error:
-                VERIFICATION_CODES.pop(email, None)
-                self.send_json(503, {"error": str(error)})
-                return
-
-            self.send_json(200, {"ok": True, "message": f"Verification code sent to {email}."})
+        try:
+            result = register_user(AUTH_DB_FILE, email, password, **employee_account_fields(email))
+        except UserAlreadyExists as error:
+            self.send_json(409, {"error": str(error)})
+            return
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        except OSError as error:
+            self.send_json(500, {"error": f"Could not save account: {error}"})
+            return
+        except Exception as error:
+            self.send_json(500, {"error": f"Signup failed: {error}"})
             return
 
-        if EMAIL_VERIFICATION_MODE in {"auto", "dev", "development", "console"}:
-            print(f"Development verification code for {email}: {code}", flush=True)
-            self.send_json(
-                200,
-                {
-                    "ok": True,
-                    "devCode": code,
-                    "message": "Development mode: use the code shown below. Configure SMTP for real email delivery.",
-                },
-            )
-            return
-
-        VERIFICATION_CODES.pop(email, None)
         self.send_json(
-            503,
-            {"error": "Email verification is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and SMTP_FROM."},
+            201,
+            {
+                "ok": True,
+                "message": "Account created. Opening dashboard...",
+                "account": result.user.public_dict(),
+                "adminSessionToken": create_admin_session(result.user.email),
+            },
+            headers={"Set-Cookie": session_cookie_header(result.user.email)},
         )
 
-    def handle_verify_email(self):
+    def handle_auth_login(self):
         try:
             payload = self.read_json()
         except (ValueError, json.JSONDecodeError):
@@ -917,31 +1628,52 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         email = normalized_email(payload.get("email"))
-        code = re.sub(r"\D", "", text(payload.get("code")))
-        if not valid_gmail(email) or len(code) != 6:
-            self.send_json(400, {"error": "Enter the 6-digit code sent to your Gmail."})
+        password = str(payload.get("password") or "")
+        if not email or len(password) < 8:
+            self.send_json(400, {"error": "Enter your email address and password."})
             return
 
-        cleanup_verification_codes()
-        record = VERIFICATION_CODES.get(email)
-        if not record:
-            self.send_json(400, {"error": "The code expired. Send a new one and try again."})
+        try:
+            user = login_user(AUTH_DB_FILE, email, password, ip_address=self.client_address[0])
+        except UserNotFound as error:
+            self.send_json(404, {"error": "We couldn't find an account for this email."})
+            return
+        except AccountNotVerified as error:
+            self.send_json(403, {"error": str(error)})
+            return
+        except RateLimitExceeded as error:
+            self.send_json(429, {"error": str(error), "retryAfterSeconds": error.retry_after_seconds})
+            return
+        except InvalidCredentials as error:
+            self.send_json(401, {"error": str(error)})
+            return
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        except Exception as error:
+            self.send_json(500, {"error": f"Login failed: {error}"})
             return
 
-        record["attempts"] = int(record.get("attempts", 0)) + 1
-        if record["attempts"] > 5:
-            VERIFICATION_CODES.pop(email, None)
-            self.send_json(429, {"error": "Too many attempts. Send a new code and try again."})
+        self.send_json(
+            200,
+            {"ok": True, "account": user.public_dict(), "adminSessionToken": create_admin_session(user.email)},
+            headers={"Set-Cookie": session_cookie_header(user.email)},
+        )
+
+    def handle_auth_clear(self):
+        try:
+            clear_users(AUTH_DB_FILE)
+        except OSError as error:
+            self.send_json(500, {"error": f"Could not clear accounts: {error}"})
             return
 
-        if not secrets.compare_digest(record.get("code", ""), code):
-            self.send_json(400, {"error": "That code is not correct."})
-            return
-
-        VERIFICATION_CODES.pop(email, None)
-        self.send_json(200, {"ok": True, "verified": True})
+        self.send_json(200, {"ok": True}, headers={"Set-Cookie": clear_session_cookie_header()})
 
     def handle_add_employee(self):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
         try:
             payload = self.read_json()
         except (ValueError, json.JSONDecodeError):
@@ -992,19 +1724,450 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         try:
             append_employee_to_workbook(employee)
-            write_dashboard_data_file()
-            refresh_runtime_data()
+            sync_dashboard_data()
         except Exception as error:
             self.send_json(500, {"error": f"Could not add employee: {error}"})
             return
 
         self.send_json(201, {"ok": True, "employee": employee})
 
-    def send_json(self, status, payload):
+    def handle_update_employee(self, employee_id):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Invalid JSON request."})
+            return
+
+        existing = employee_by_id(employee_id)
+        if not existing:
+            self.send_json(404, {"error": "Employee was not found."})
+            return
+
+        department = department_by_name(payload.get("department"))
+        if not department:
+            self.send_json(400, {"error": "Choose a valid department."})
+            return
+
+        employee_name = text(payload.get("employeeName"))
+        email = normalized_email(payload.get("email"))
+        job_title = text(payload.get("jobTitle"))
+        level = text(payload.get("level")) or text(existing.get("Level")) or "Associate"
+        manager = text(payload.get("manager")) or "Department PMO"
+        location = text(payload.get("location")) or "Remote"
+        status = text(payload.get("employmentStatus")) or "Active"
+
+        if not employee_name:
+            self.send_json(400, {"error": "Employee name is required."})
+            return
+        if not email or "@" not in email:
+            self.send_json(400, {"error": "Employee email is required."})
+            return
+        if any(
+            text(row.get("Employee ID")) != text(employee_id)
+            and normalized_email(row.get("Email")) == email
+            for row in EMPLOYEES
+        ):
+            self.send_json(409, {"error": "Another employee already uses this email."})
+            return
+        if not job_title:
+            self.send_json(400, {"error": "Job title is required."})
+            return
+
+        employee = {
+            "Employee ID": text(existing.get("Employee ID")),
+            "Employee Name": employee_name,
+            "Email": email,
+            "Department ID": text(department.get("Department ID")),
+            "Department": text(department.get("Department Name")),
+            "Job Title": job_title,
+            "Level": level,
+            "Manager": manager,
+            "Location": location,
+            "Hire Date": text(existing.get("Hire Date")) or excel_serial_today(),
+            "Employment Status": status,
+        }
+
+        try:
+            update_employee_in_workbook(employee_id, employee)
+            sync_dashboard_data()
+        except Exception as error:
+            self.send_json(500, {"error": f"Could not update employee: {error}"})
+            return
+
+        self.send_json(200, {"ok": True, "employee": employee})
+
+    def handle_add_task(self):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Invalid JSON request."})
+            return
+
+        task_name = text(payload.get("taskName"))
+        project = project_by_id(payload.get("projectId"))
+        assignee = employee_by_id(payload.get("assignedToId"))
+        status = text(payload.get("status")) or "Backlog"
+        priority = text(payload.get("priority")) or "Medium"
+
+        if not task_name:
+            self.send_json(400, {"error": "Task name is required."})
+            return
+        if not project:
+            self.send_json(400, {"error": "Choose a valid project."})
+            return
+        if not assignee:
+            self.send_json(400, {"error": "Choose a valid assignee."})
+            return
+        if status not in TASK_STATUSES:
+            self.send_json(400, {"error": "Choose a valid task status."})
+            return
+        if priority not in TASK_PRIORITIES:
+            self.send_json(400, {"error": "Choose a valid task priority."})
+            return
+
+        try:
+            due_date_value = validated_number_field(
+                payload.get("dueDate"),
+                "Due date",
+                minimum=1,
+                allow_blank=False,
+            )
+            estimated_hours_value = validated_number_field(
+                payload.get("estimatedHours"),
+                "Estimated hours",
+                allow_blank=False,
+            )
+            completion_value = validated_number_field(
+                payload.get("completion"),
+                "Completion",
+                minimum=0,
+                maximum=100,
+                allow_blank=False,
+            )
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+
+        task = {
+            "Task ID": next_task_id(),
+            "Project ID": text(project.get("Project ID")),
+            "Project": text(project.get("Project Name")),
+            "Task Name": task_name,
+            "Assigned To ID": text(assignee.get("Employee ID")),
+            "Assigned To": text(assignee.get("Employee Name")),
+            "Department ID": text(assignee.get("Department ID")),
+            "Department": text(assignee.get("Department")),
+            "Status": status,
+            "Priority": priority,
+            "Due Date": due_date_value,
+            "Estimated Hours": estimated_hours_value,
+            "Actual Hours": "",
+            "Completion %": completion_value,
+        }
+
+        try:
+            append_task_to_workbook(task)
+            sync_dashboard_data()
+        except Exception as error:
+            self.send_json(500, {"error": f"Could not add task: {error}"})
+            return
+
+        self.send_json(201, {"ok": True, "task": task})
+
+    def handle_add_project(self):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Invalid JSON request."})
+            return
+
+        project_name = text(payload.get("projectName"))
+        department = department_by_name(payload.get("department"))
+        owner = employee_by_id(payload.get("ownerId"))
+        status = text(payload.get("status")) or "Planning"
+        priority = text(payload.get("priority")) or "Medium"
+        risk = text(payload.get("risk")) or "Medium"
+        strategic_theme = text(payload.get("strategicTheme"))
+
+        if not project_name:
+            self.send_json(400, {"error": "Project name is required."})
+            return
+        if not department:
+            self.send_json(400, {"error": "Choose a valid department."})
+            return
+        if not owner:
+            self.send_json(400, {"error": "Choose a valid project owner."})
+            return
+        if status not in PROJECT_STATUSES:
+            self.send_json(400, {"error": "Choose a valid project status."})
+            return
+        if priority not in PROJECT_PRIORITIES:
+            self.send_json(400, {"error": "Choose a valid project priority."})
+            return
+        if risk not in PROJECT_RISK_LEVELS:
+            self.send_json(400, {"error": "Choose a valid risk level."})
+            return
+
+        try:
+            start_date_value = validated_number_field(
+                payload.get("startDate"),
+                "Start date",
+                minimum=1,
+                allow_blank=False,
+            )
+            target_end_value = validated_number_field(
+                payload.get("targetEndDate"),
+                "Target end date",
+                minimum=1,
+                allow_blank=False,
+            )
+            progress_value = validated_number_field(
+                payload.get("progress", 0),
+                "Progress",
+                minimum=0,
+                maximum=100,
+                allow_blank=False,
+            )
+            budget_value = validated_number_field(
+                payload.get("budget", 0),
+                "Budget",
+                minimum=0,
+                allow_blank=False,
+            )
+            spend_value = validated_number_field(
+                payload.get("spend", 0),
+                "Actual spend",
+                minimum=0,
+                allow_blank=False,
+            )
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+
+        project = {
+            "Project ID": next_project_id(),
+            "Project Name": project_name,
+            "Department ID": text(department.get("Department ID")),
+            "Department": text(department.get("Department Name")),
+            "Owner ID": text(owner.get("Employee ID")),
+            "Owner": text(owner.get("Employee Name")),
+            "Status": status,
+            "Priority": priority,
+            "Risk Level": risk,
+            "Start Date": start_date_value,
+            "Target End Date": target_end_value,
+            "Progress %": progress_value,
+            "Budget SAR": budget_value,
+            "Actual Spend SAR": spend_value,
+            "Strategic Theme": strategic_theme,
+        }
+
+        try:
+            append_project_to_workbook(project)
+            sync_dashboard_data()
+        except Exception as error:
+            self.send_json(500, {"error": f"Could not add project: {error}"})
+            return
+
+        self.send_json(201, {"ok": True, "project": project})
+
+    def handle_update_project(self, project_id):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Invalid JSON request."})
+            return
+
+        existing = project_by_id(project_id)
+        if not existing:
+            self.send_json(404, {"error": "Project was not found."})
+            return
+
+        project_name = text(payload.get("projectName")) or text(existing.get("Project Name"))
+        department = department_by_name(payload.get("department")) if "department" in payload else None
+        owner = employee_by_id(payload.get("ownerId")) if text(payload.get("ownerId")) else None
+        status = text(payload.get("status")) or text(existing.get("Status"))
+        priority = text(payload.get("priority")) or text(existing.get("Priority"))
+        risk = text(payload.get("risk")) or text(existing.get("Risk Level"))
+        theme = text(payload.get("strategicTheme")) if "strategicTheme" in payload else text(existing.get("Strategic Theme"))
+
+        if not project_name:
+            self.send_json(400, {"error": "Project name is required."})
+            return
+        if "department" in payload and not department:
+            self.send_json(400, {"error": "Choose a valid department."})
+            return
+        if status not in PROJECT_STATUSES:
+            self.send_json(400, {"error": "Choose a valid project status."})
+            return
+        if priority not in PROJECT_PRIORITIES:
+            self.send_json(400, {"error": "Choose a valid project priority."})
+            return
+        if risk not in PROJECT_RISK_LEVELS:
+            self.send_json(400, {"error": "Choose a valid risk level."})
+            return
+
+        try:
+            progress_value = validated_number_field(
+                payload.get("progress", existing.get("Progress %")),
+                "Progress",
+                minimum=0,
+                maximum=100,
+                allow_blank=False,
+            )
+            budget_value = validated_number_field(
+                payload.get("budget", existing.get("Budget SAR")),
+                "Budget",
+                minimum=0,
+                allow_blank=False,
+            )
+            spend_value = validated_number_field(
+                payload.get("spend", existing.get("Actual Spend SAR")),
+                "Actual spend",
+                minimum=0,
+                allow_blank=False,
+            )
+            start_date_value = validated_number_field(
+                payload.get("startDate", existing.get("Start Date")),
+                "Start date",
+                minimum=1,
+                allow_blank=False,
+            )
+            target_end_value = validated_number_field(
+                payload.get("targetEndDate", existing.get("Target End Date")),
+                "Target end date",
+                minimum=1,
+                allow_blank=False,
+            )
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+
+        project = {header: text(existing.get(header)) for header in PROJECT_HEADERS}
+        project["Project Name"] = project_name
+        if department:
+            project["Department ID"] = text(department.get("Department ID"))
+            project["Department"] = text(department.get("Department Name"))
+        if owner:
+            project["Owner ID"] = text(owner.get("Employee ID"))
+            project["Owner"] = text(owner.get("Employee Name"))
+        project["Status"] = status
+        project["Priority"] = priority
+        project["Risk Level"] = risk
+        project["Start Date"] = start_date_value
+        project["Target End Date"] = target_end_value
+        project["Progress %"] = progress_value
+        project["Budget SAR"] = budget_value
+        project["Actual Spend SAR"] = spend_value
+        project["Strategic Theme"] = theme
+
+        try:
+            update_project_in_workbook(project_id, project)
+            sync_dashboard_data()
+        except Exception as error:
+            self.send_json(500, {"error": f"Could not update project: {error}"})
+            return
+
+        self.send_json(200, {"ok": True, "project": project})
+
+    def handle_update_task(self, task_id):
+        if not self.require_admin_session():
+            self.send_json(403, {"error": "Admin access is required."})
+            return
+
+        try:
+            payload = self.read_json()
+        except (ValueError, json.JSONDecodeError):
+            self.send_json(400, {"error": "Invalid JSON request."})
+            return
+
+        existing = task_by_id(task_id)
+        if not existing:
+            self.send_json(404, {"error": "Task was not found."})
+            return
+
+        task_name = text(payload.get("taskName")) or text(existing.get("Task Name"))
+        assigned_to = text(payload.get("assignedTo")) if "assignedTo" in payload else text(existing.get("Assigned To"))
+        status = text(payload.get("status")) or text(existing.get("Status"))
+        priority = text(payload.get("priority")) or text(existing.get("Priority"))
+
+        if not task_name:
+            self.send_json(400, {"error": "Task name is required."})
+            return
+        if status not in TASK_STATUSES:
+            self.send_json(400, {"error": "Choose a valid task status."})
+            return
+        if priority not in TASK_PRIORITIES:
+            self.send_json(400, {"error": "Choose a valid task priority."})
+            return
+
+        try:
+            due_date_value = validated_number_field(
+                payload.get("dueDate", existing.get("Due Date")),
+                "Due date",
+                minimum=1,
+            )
+            estimated_hours_value = validated_number_field(
+                payload.get("estimatedHours", existing.get("Estimated Hours")),
+                "Estimated hours",
+            )
+            actual_hours_value = validated_number_field(
+                payload.get("actualHours", existing.get("Actual Hours")),
+                "Actual hours",
+            )
+            completion_value = validated_number_field(
+                payload.get("completion", existing.get("Completion %")),
+                "Completion",
+                minimum=0,
+                maximum=100,
+                allow_blank=False,
+            )
+        except AuthError as error:
+            self.send_json(400, {"error": str(error)})
+            return
+
+        task = {header: text(existing.get(header)) for header in TASK_HEADERS}
+        task["Task Name"] = task_name
+        task["Assigned To"] = assigned_to
+        task["Status"] = status
+        task["Priority"] = priority
+        task["Due Date"] = due_date_value
+        task["Estimated Hours"] = estimated_hours_value
+        task["Actual Hours"] = actual_hours_value
+        task["Completion %"] = completion_value
+
+        try:
+            update_task_in_workbook(task_id, task)
+            sync_dashboard_data()
+        except Exception as error:
+            self.send_json(500, {"error": f"Could not update task: {error}"})
+            return
+
+        self.send_json(200, {"ok": True, "task": task})
+
+    def send_json(self, status, payload, headers=None):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for header, value in (headers or {}).items():
+            self.send_header(header, value)
         self.end_headers()
         self.wfile.write(body)
 

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Enterprise Operations Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="auth-guard.js"></script>
     <script src="dashboard-data.js"></script>
     <script src="app.js" defer></script>
     <script src="chatbot.js" defer></script>
@@ -20,7 +21,6 @@
           <span id="refreshDate">Loaded</span>
           <div class="topbar__account" id="accountBlock" hidden>
             <div class="topbar__account-row">
-              <button class="topbar__admin" id="adminButton" type="button">Admin</button>
               <span id="authStatus" class="topbar__status"></span>
             </div>
             <button class="topbar__logout" id="logoutButton" type="button">Log Out</button>
@@ -136,73 +136,64 @@
               </div>
               <div class="panel__tools">
                 <span class="panel__stat" id="employeeCount"></span>
-                <button class="button button--ghost" id="openAddEmployee" type="button">Add Employee</button>
+                <button class="button" id="openAddEmployee" type="button" hidden>Add Employee</button>
               </div>
             </div>
 
-            <div class="employee-add-panel" id="addEmployeePanel" hidden>
-              <form class="employee-add-form" id="addEmployeeForm">
+            <div class="employee-summary" id="employeeSummary" aria-label="Employee summary"></div>
+
+            <section class="employee-add-panel" id="addEmployeePanel" hidden>
+              <form class="employee-add-form" id="addEmployeeForm" novalidate>
                 <div class="employee-add-form__header">
                   <div>
-                    <p class="eyebrow">Signed-Up Gmail</p>
+                    <p class="eyebrow">New Employee</p>
                     <h3>Add Employee</h3>
                   </div>
                   <button class="icon-control" id="closeAddEmployee" type="button" aria-label="Close add employee" title="Close add employee">x</button>
                 </div>
-                <p class="employee-add-message" id="addEmployeeMessage"></p>
+
                 <div class="employee-add-grid">
                   <label>
                     <span>Email</span>
-                    <select id="addEmployeeEmail" name="email" required></select>
+                    <input name="email" type="email" autocomplete="email" placeholder="name@gmail.com" required />
                   </label>
                   <label>
                     <span>Employee Name</span>
-                    <input id="addEmployeeName" name="employeeName" type="text" required />
+                    <input name="employeeName" type="text" required />
                   </label>
                   <label>
                     <span>Department</span>
-                    <select id="addEmployeeDepartment" name="department" required></select>
+                    <select name="department" id="addEmployeeDepartment" required></select>
                   </label>
                   <label>
                     <span>Job Title</span>
-                    <input id="addEmployeeJobTitle" name="jobTitle" type="text" required />
+                    <input name="jobTitle" type="text" required />
                   </label>
                   <label>
                     <span>Level</span>
-                    <select id="addEmployeeLevel" name="level">
-                      <option>Associate</option>
-                      <option>Specialist</option>
-                      <option>Senior Specialist</option>
-                      <option>Lead</option>
-                      <option>Manager</option>
-                      <option>Senior Manager</option>
-                    </select>
+                    <select name="level" id="addEmployeeLevel"></select>
                   </label>
                   <label>
                     <span>Manager</span>
-                    <input id="addEmployeeManager" name="manager" type="text" placeholder="Department PMO" />
+                    <input name="manager" type="text" placeholder="Department PMO" />
                   </label>
                   <label>
                     <span>Location</span>
-                    <select id="addEmployeeLocation" name="location"></select>
+                    <select name="location" id="addEmployeeLocation"></select>
                   </label>
                   <label>
                     <span>Status</span>
-                    <select id="addEmployeeStatus" name="employmentStatus">
-                      <option>Active</option>
-                      <option>Contractor</option>
-                      <option>On Leave</option>
-                    </select>
+                    <select name="employmentStatus" id="addEmployeeStatus"></select>
                   </label>
                 </div>
+
+                <p class="employee-add-message" id="addEmployeeMessage"></p>
                 <div class="employee-add-actions">
                   <button class="button button--ghost" id="cancelAddEmployee" type="button">Cancel</button>
-                  <button class="button" type="submit">Add Employee</button>
+                  <button class="button" type="submit">Create Employee</button>
                 </div>
               </form>
-            </div>
-
-            <div class="employee-summary" id="employeeSummary" aria-label="Employee summary"></div>
+            </section>
 
             <div class="employee-controls" aria-label="Employee filters">
               <label>
@@ -255,16 +246,185 @@
             </div>
           </article>
 
-          <article class="panel panel--full">
+          <article class="panel panel--full" id="tasksSection">
+            <div class="panel__header panel__header--stack">
+              <div>
+                <p class="eyebrow">Tasks</p>
+                <h2>Task List</h2>
+              </div>
+              <div class="panel__tools">
+                <span class="panel__stat" id="taskTableCount"></span>
+                <button class="button" id="openAddTask" type="button" hidden>Add Task</button>
+                <label class="panel__rows">
+                  <span>Rows</span>
+                  <select id="taskPageSize">
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">All</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <section class="task-add-panel" id="addTaskPanel" hidden>
+              <form class="task-add-form" id="addTaskForm">
+                <div class="employee-add-form__header">
+                  <div>
+                    <p class="eyebrow">New Task</p>
+                    <h3>Assign Task</h3>
+                  </div>
+                  <button class="icon-control" id="closeAddTask" type="button" aria-label="Close add task" title="Close add task">x</button>
+                </div>
+                <div class="task-table-edit-form">
+                  <label>
+                    <span>Task Name</span>
+                    <input name="taskName" type="text" required />
+                  </label>
+                  <label>
+                    <span>Project</span>
+                    <select name="projectId" id="addTaskProject" required></select>
+                  </label>
+                  <label>
+                    <span>Assign To</span>
+                    <select name="assignedToId" id="addTaskAssignee" required></select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select name="status" id="addTaskStatus"></select>
+                  </label>
+                  <label>
+                    <span>Priority</span>
+                    <select name="priority" id="addTaskPriority"></select>
+                  </label>
+                  <label>
+                    <span>Due Date</span>
+                    <input name="dueDate" type="date" required />
+                  </label>
+                  <label>
+                    <span>Estimated Hours</span>
+                    <input name="estimatedHours" type="number" min="0" step="0.25" value="8" />
+                  </label>
+                  <label>
+                    <span>Completion %</span>
+                    <input name="completion" type="number" min="0" max="100" step="1" value="0" />
+                  </label>
+                </div>
+                <p class="task-edit-message" id="addTaskMessage"></p>
+                <div class="task-edit-actions">
+                  <button class="button button--ghost" id="cancelAddTask" type="button">Cancel</button>
+                  <button class="button" type="submit">Create Task</button>
+                </div>
+              </form>
+            </section>
+
+            <div class="table-wrap task-table-wrap">
+              <table class="task-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Task</th>
+                    <th>Project</th>
+                    <th>Assignee</th>
+                    <th>Department</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Due</th>
+                    <th>Progress</th>
+                    <th>Hours</th>
+                    <th>Admin</th>
+                  </tr>
+                </thead>
+                <tbody id="taskTable"></tbody>
+              </table>
+            </div>
+
+            <div class="pagination" aria-label="Task pagination">
+              <button class="button button--ghost" id="taskPrev" type="button">Previous</button>
+              <span id="taskPageInfo"></span>
+              <button class="button button--ghost" id="taskNext" type="button">Next</button>
+            </div>
+          </article>
+
+            <article class="panel panel--full">
             <div class="panel__header">
               <div>
                 <p class="eyebrow">Projects</p>
                 <h2>Portfolio Table</h2>
               </div>
-              <span class="panel__stat" id="tableCount"></span>
+              <div class="panel__header-actions">
+                <button class="button" id="openAddProject" type="button" hidden>Add Project</button>
+                <span class="panel__stat" id="tableCount"></span>
+              </div>
             </div>
+            <section class="project-add-panel" id="addProjectPanel" hidden>
+              <form class="employee-add-form project-add-form" id="addProjectForm" novalidate>
+                <div class="employee-add-form__header">
+                  <div>
+                    <p class="eyebrow">New Project</p>
+                    <h3>Add Project</h3>
+                  </div>
+                  <button class="icon-control" id="closeAddProject" type="button" aria-label="Close add project" title="Close add project">x</button>
+                </div>
+                <div class="project-add-grid">
+                  <label>
+                    <span>Project Name</span>
+                    <input name="projectName" type="text" required />
+                  </label>
+                  <label>
+                    <span>Department</span>
+                    <select name="department" id="addProjectDepartment" required></select>
+                  </label>
+                  <label>
+                    <span>Owner</span>
+                    <select name="ownerId" id="addProjectOwner" required></select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select name="status" id="addProjectStatus"></select>
+                  </label>
+                  <label>
+                    <span>Priority</span>
+                    <select name="priority" id="addProjectPriority"></select>
+                  </label>
+                  <label>
+                    <span>Risk Level</span>
+                    <select name="risk" id="addProjectRisk"></select>
+                  </label>
+                  <label>
+                    <span>Start Date</span>
+                    <input name="startDate" type="date" required />
+                  </label>
+                  <label>
+                    <span>Target End Date</span>
+                    <input name="targetEndDate" type="date" required />
+                  </label>
+                  <label>
+                    <span>Progress %</span>
+                    <input name="progress" type="number" min="0" max="100" step="1" value="0" />
+                  </label>
+                  <label>
+                    <span>Budget SAR</span>
+                    <input name="budget" type="number" min="0" step="0.01" value="0" />
+                  </label>
+                  <label>
+                    <span>Actual Spend SAR</span>
+                    <input name="spend" type="number" min="0" step="0.01" value="0" />
+                  </label>
+                  <label>
+                    <span>Strategic Theme</span>
+                    <input name="strategicTheme" type="text" />
+                  </label>
+                </div>
+                <p class="employee-add-message" id="addProjectMessage"></p>
+                <div class="employee-add-actions">
+                  <button class="button button--ghost" id="cancelAddProject" type="button">Cancel</button>
+                  <button class="button" type="submit">Create Project</button>
+                </div>
+              </form>
+            </section>
             <div class="table-wrap">
-              <table>
+              <table class="project-table">
                 <thead>
                   <tr>
                     <th>Project</th>
@@ -275,6 +435,7 @@
                     <th>Progress</th>
                     <th>Budget</th>
                     <th>Spend</th>
+                    <th>Admin</th>
                   </tr>
                 </thead>
                 <tbody id="projectTable"></tbody>
@@ -314,29 +475,6 @@
       </header>
       <div class="employee-detail-drawer__body" id="employeeDetailBody"></div>
     </aside>
-
-    <div class="admin-password-scrim" id="adminPasswordScrim" hidden></div>
-
-    <section class="admin-password-modal" id="adminPasswordModal" aria-labelledby="adminPasswordTitle" aria-hidden="true">
-      <form class="admin-password-form" id="adminPasswordForm">
-        <div class="admin-password-form__header">
-          <div>
-            <p class="eyebrow">Admin</p>
-            <h2 id="adminPasswordTitle">Enter Password</h2>
-          </div>
-          <button class="icon-control" id="closeAdminPassword" type="button" aria-label="Close admin password" title="Close admin password">x</button>
-        </div>
-        <label>
-          <span>Password</span>
-          <input id="adminPasswordInput" name="password" type="password" autocomplete="current-password" required />
-        </label>
-        <p class="admin-password-message" id="adminPasswordMessage"></p>
-        <div class="admin-password-actions">
-          <button class="button button--ghost" id="cancelAdminPassword" type="button">Cancel</button>
-          <button class="button" type="submit">Continue</button>
-        </div>
-      </form>
-    </section>
 
     <button class="chat-launcher" id="chatLauncher" type="button" aria-label="Open assistant">
       <span aria-hidden="true">?</span>
