@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import io
 from http.cookies import SimpleCookie
 import json
 import os
@@ -36,8 +37,16 @@ from tools.export_data import workbook_to_json
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_JS_FILE = BASE_DIR / "dashboard-data.js"
-AUTH_DB_FILE = BASE_DIR / ".dashboard-auth.sqlite3"
-SESSION_SECRET_FILE = BASE_DIR / ".dashboard-session-secret"
+RUNTIME_DIR = Path(
+    os.environ.get("DASHBOARD_RUNTIME_DIR")
+    or ("/tmp/dashboard" if os.environ.get("VERCEL") else BASE_DIR)
+)
+AUTH_DB_FILE = Path(
+    os.environ.get("DASHBOARD_AUTH_DB_FILE", RUNTIME_DIR / ".dashboard-auth.sqlite3")
+)
+SESSION_SECRET_FILE = Path(
+    os.environ.get("DASHBOARD_SESSION_SECRET_FILE", RUNTIME_DIR / ".dashboard-session-secret")
+)
 SESSION_COOKIE_NAME = "dashboardSession"
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 ADMIN_SESSION_TOKENS = {}
@@ -134,8 +143,9 @@ def load_session_secret():
     if SESSION_SECRET_FILE.exists():
         return SESSION_SECRET_FILE.read_text(encoding="utf-8").strip().encode("utf-8")
     secret = secrets.token_hex(32)
-    SESSION_SECRET_FILE.write_text(secret, encoding="utf-8")
     try:
+        SESSION_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_SECRET_FILE.write_text(secret, encoding="utf-8")
         SESSION_SECRET_FILE.chmod(0o600)
     except OSError:
         pass
@@ -2170,6 +2180,138 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header(header, value)
         self.end_headers()
         self.wfile.write(body)
+
+
+class _NonClosingBytesIO(io.BytesIO):
+    def close(self):
+        self.flush()
+
+
+class _WSGIRequestSocket:
+    def __init__(self, request_bytes):
+        self._reader = io.BytesIO(request_bytes)
+        self._writer = _NonClosingBytesIO()
+
+    def makefile(self, mode, buffering=None):
+        if "r" in mode:
+            return self._reader
+        return self._writer
+
+    def sendall(self, data):
+        self._writer.write(data)
+
+    def getvalue(self):
+        return self._writer.getvalue()
+
+    def close(self):
+        pass
+
+
+class _WSGIServer:
+    def __init__(self, environ):
+        self.server_name = environ.get("SERVER_NAME", "vercel")
+        try:
+            self.server_port = int(environ.get("SERVER_PORT", "443"))
+        except ValueError:
+            self.server_port = 443
+
+
+class DashboardWSGIApp:
+    def __call__(self, environ, start_response):
+        request_bytes = self._build_http_request(environ)
+        socket = _WSGIRequestSocket(request_bytes)
+        server = _WSGIServer(environ)
+        remote_addr = environ.get("REMOTE_ADDR", "127.0.0.1")
+
+        DashboardHandler(socket, (remote_addr, 0), server, directory=str(BASE_DIR))
+        raw_response = socket.getvalue()
+        header_bytes, _, body = raw_response.partition(b"\r\n\r\n")
+        header_lines = header_bytes.split(b"\r\n")
+
+        status = self._parse_status(header_lines[0] if header_lines else b"")
+        headers = self._parse_headers(header_lines[1:])
+        start_response(status, headers)
+        return [body]
+
+    def _build_http_request(self, environ):
+        method = environ.get("REQUEST_METHOD", "GET").upper()
+        target = self._request_target(environ)
+        protocol = environ.get("SERVER_PROTOCOL", "HTTP/1.1")
+        body = self._request_body(environ)
+        headers = self._request_headers(environ, body)
+
+        request = f"{method} {target} {protocol}\r\n".encode("iso-8859-1")
+        request += b"".join(
+            f"{name}: {value}\r\n".encode("iso-8859-1")
+            for name, value in headers
+            if value is not None
+        )
+        return request + b"\r\n" + body
+
+    def _request_target(self, environ):
+        raw_uri = environ.get("RAW_URI") or environ.get("REQUEST_URI")
+        if raw_uri:
+            return raw_uri
+
+        path = environ.get("PATH_INFO") or "/"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        target = urllib.parse.quote(path, safe="/%:@")
+        query = environ.get("QUERY_STRING")
+        if query:
+            target = f"{target}?{query}"
+        return target
+
+    def _request_body(self, environ):
+        try:
+            length = int(environ.get("CONTENT_LENGTH") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return b""
+        return environ["wsgi.input"].read(length)
+
+    def _request_headers(self, environ, body):
+        headers = []
+        if environ.get("CONTENT_TYPE"):
+            headers.append(("Content-Type", environ["CONTENT_TYPE"]))
+        headers.append(("Content-Length", environ.get("CONTENT_LENGTH") or str(len(body))))
+
+        has_host = False
+        for key, value in environ.items():
+            if not key.startswith("HTTP_") or key == "HTTP_PROXY":
+                continue
+            name = key[5:].replace("_", "-").title()
+            if name == "Host":
+                has_host = True
+            headers.append((name, value))
+
+        if not has_host:
+            host = environ.get("SERVER_NAME", "localhost")
+            port = environ.get("SERVER_PORT")
+            headers.append(("Host", f"{host}:{port}" if port else host))
+        return headers
+
+    def _parse_status(self, status_line):
+        try:
+            decoded = status_line.decode("iso-8859-1")
+            _, code, reason = decoded.split(" ", 2)
+        except ValueError:
+            return "500 Internal Server Error"
+        return f"{code} {reason}"
+
+    def _parse_headers(self, header_lines):
+        headers = []
+        for line in header_lines:
+            if not line or b":" not in line:
+                continue
+            name, value = line.split(b":", 1)
+            headers.append((name.decode("iso-8859-1"), value.strip().decode("iso-8859-1")))
+        return headers
+
+
+app = DashboardWSGIApp()
+application = app
 
 
 if __name__ == "__main__":
